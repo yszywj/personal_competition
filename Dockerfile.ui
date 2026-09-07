@@ -1,0 +1,17 @@
+FROM competition:ppo
+
+USER root
+
+# Pygame's bundled SDL loads these libraries dynamically when the X11
+# video driver is selected.  They are intentionally kept in this small
+# derivative image so the CUDA/PyTorch base layer does not need rebuilding.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        libxext6 \
+        libxcursor1 \
+        libxi6 \
+        libxfixes3 \
+        libxrandr2 \
+        fontconfig \
+        fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
