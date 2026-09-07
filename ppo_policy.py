@@ -11,13 +11,17 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Optional
 
+from .bootstrap import install_project_paths
+
+install_project_paths()
+
 import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
-from policies.red.learning.device import resolve_learning_device
+from .device import resolve_learning_device
 from policies.red.learning.red_policy import (
     ACTION_DIM,
     PolicyTransition,

@@ -26,14 +26,20 @@ from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 
-PERSONAL_ROOT = Path(__file__).resolve().parent
-REPOSITORY_ROOT = PERSONAL_ROOT.parent
-SCENARIOS_ROOT = REPOSITORY_ROOT / "scenarios"
+if __package__:
+    from .bootstrap import (
+        PERSONAL_ROOT, REPOSITORY_ROOT, SCENARIOS_ROOT, validate_personal_output_path,
+    )
+else:
+    from bootstrap import (
+        PERSONAL_ROOT, REPOSITORY_ROOT, SCENARIOS_ROOT, validate_personal_output_path,
+    )
 RESULTS_ROOT = PERSONAL_ROOT / "results"
 MODELS_ROOT = PERSONAL_ROOT / "models"
+LAUNCHER_RUNS_ROOT = PERSONAL_ROOT / "launcher_runs"
 TRAINER_IN_CONTAINER = "/app/personal_train/train_r9_ppo.py"
 PERSONAL_IN_CONTAINER = Path("/app/personal_train")
 ALL_SCENARIOS = ("E01", "E02", "E03", "M01", "M02", "M03", "H01", "H02", "H03")
@@ -42,13 +48,24 @@ CURRENT_SCHEMA_VERSION = 2
 CURRENT_ALGORITHM = "personal_ppo_gae_v2"
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _GPU_ID = re.compile(r"^(?:[0-9]+|GPU-[A-Fa-f0-9-]+)$")
+_RUN_TIMESTAMP = re.compile(r"^[0-9]{8}_[0-9]{6}_[0-9]{6}$")
 
 
 @dataclass(frozen=True)
-class E01Checkpoint:
+class ScenarioCheckpoint:
     path: Path
     recorded_score: float | None
     selection: str
+    scenario: str = "E01"
+    source_batch: str | None = None
+    latest_round: int | None = None
+    best_round: int | None = None
+    interrupted: bool = False
+    sha256: str | None = None
+
+
+# Kept as an import-compatible name for callers that explicitly select E01.
+E01Checkpoint = ScenarioCheckpoint
 
 
 @dataclass(frozen=True)
@@ -58,6 +75,10 @@ class JobPlan:
     model_dir: Path
     resume: Path | None = None
     initial_score: float | None = None
+
+    @property
+    def run_name(self) -> str:
+        return self.result_dir.name
 
     @property
     def initialization(self) -> str:
@@ -85,7 +106,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run independent R9 PPO training jobs in isolated Docker containers. "
-            "E01 starts from an existing best checkpoint; all other cases start fresh."
+            "A resume batch initializes every selected scenario from its own best checkpoint."
         )
     )
     parser.add_argument("--rounds", type=int, default=100, help="Rounds per scenario.")
@@ -97,17 +118,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Subset of E01 E02 E03 M01 M02 M03 H01 H02 H03.",
     )
     parser.add_argument(
+        "--resume-batch",
+        type=Path,
+        default=None,
+        help=(
+            "Existing models batch directory or its direct child name below personal_train/models. "
+            "Every selected scenario is initialized from <batch>/<scenario>/best.pt."
+        ),
+    )
+    parser.add_argument(
         "--e01-resume",
         type=Path,
         default=None,
         help=(
-            "E01 best.pt on the host. If omitted, the compatible E01 best with "
-            "the highest recorded score below personal_train/models is selected."
+            "Legacy E01-only checkpoint option. It cannot be combined with --resume-batch."
         ),
     )
     parser.add_argument("--seed", type=int, default=1, help="One comparable seed per scenario.")
     parser.add_argument("--blue-policy", default="b0_fixed_ratio_random")
-    parser.add_argument("--image", default="competition:ppo", help="Docker training image.")
+    parser.add_argument("--image", default="personal-competition:runtime", help="Docker runtime image.")
     parser.add_argument(
         "--gpu-ids",
         default="0,1",
@@ -135,7 +164,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch-id",
         default=None,
-        help="Exact common directory name; default: r9_multi_<timestamp>.",
+        help="Launcher control-run ID; default: r9_multi_<timestamp>. Business outputs stay flat.",
     )
     parser.add_argument("--docker", default="docker", help="Docker CLI executable.")
     parser.add_argument("--stop-timeout", type=int, default=60)
@@ -164,6 +193,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     if args.batch_id is not None and not _SAFE_ID.fullmatch(args.batch_id):
         parser.error("--batch-id must use only A-Z, a-z, 0-9, _, ., - and be at most 64 characters")
+    if args.resume_batch is not None and args.e01_resume is not None:
+        parser.error("--resume-batch and --e01-resume cannot be combined")
 
     try:
         args.devices = parse_devices(args.gpu_ids)
@@ -215,7 +246,7 @@ def _atomic_json(path: Path, value: Any) -> None:
     _atomic_text(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
 
-def _current_e01_metadata(metadata: Any) -> bool:
+def _current_checkpoint_metadata(metadata: Any, *, allow_interrupted: bool) -> bool:
     if not isinstance(metadata, dict):
         return False
     schema = metadata.get("checkpoint_schema")
@@ -228,47 +259,68 @@ def _current_e01_metadata(metadata: Any) -> bool:
         and schema.get("name") == CURRENT_SCHEMA_NAME
         and version == CURRENT_SCHEMA_VERSION
         and metadata.get("algorithm") == CURRENT_ALGORITHM
-        and not bool(metadata.get("interrupted", False))
+        and (allow_interrupted or not bool(metadata.get("interrupted", False)))
+    )
+
+
+def _current_e01_metadata(metadata: Any) -> bool:
+    """Backward-compatible strict predicate used for completed job outputs."""
+
+    return _current_checkpoint_metadata(metadata, allow_interrupted=False)
+
+
+def _result_dirs_for_model_metadata(metadata_path: Path) -> tuple[Path, ...]:
+    try:
+        relative_dir = metadata_path.parent.relative_to(MODELS_ROOT.resolve())
+    except ValueError:
+        return ()
+    # Historical results may be archived without moving their paired models.
+    return (
+        RESULTS_ROOT / relative_dir,
+        RESULTS_ROOT / "results_past" / relative_dir,
     )
 
 
 def _model_scenario(metadata_path: Path) -> str | None:
-    try:
-        relative_dir = metadata_path.parent.relative_to(MODELS_ROOT)
-    except ValueError:
-        return None
-    run_config = RESULTS_ROOT / relative_dir / "run_config.json"
-    try:
-        value = json.loads(run_config.read_text(encoding="utf-8")).get("scenario")
-        return str(value).upper() if value else None
-    except (OSError, ValueError, AttributeError):
-        pass
-    lowered = relative_dir.name.lower()
-    if lowered == "e01" or lowered.startswith("e01_"):
-        return "E01"
+    for result_dir in _result_dirs_for_model_metadata(metadata_path):
+        try:
+            value = json.loads((result_dir / "run_config.json").read_text(encoding="utf-8")).get(
+                "scenario"
+            )
+            if value:
+                return str(value).upper()
+        except (OSError, ValueError, AttributeError, json.JSONDecodeError):
+            continue
+    name = metadata_path.parent.name.upper()
+    if name in ALL_SCENARIOS:
+        return name
+    match = re.match(r"^([emh]0[1-3])_r9_ppo_", metadata_path.parent.name, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
     return None
 
 
 def _model_run_is_complete(metadata_path: Path, metadata: dict[str, Any]) -> bool:
-    try:
-        relative_dir = metadata_path.parent.relative_to(MODELS_ROOT)
-        result_dir = RESULTS_ROOT / relative_dir
-        run_config = json.loads((result_dir / "run_config.json").read_text(encoding="utf-8"))
-        requested_rounds = int(run_config["rounds"])
-        latest_round = int(metadata["latest_round"])
-        best_round = int(metadata["best_round"])
-        best_score = float(metadata["best_official_score"])
-    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-        return False
-    return bool(
-        requested_rounds > 0
-        and latest_round == requested_rounds
-        and 1 <= best_round <= latest_round
-        and math.isfinite(best_score)
-        and 0.0 <= best_score <= 100.0
-        and not (result_dir / "failure.json").exists()
-        and not (result_dir / "interruption.json").exists()
-    )
+    for result_dir in _result_dirs_for_model_metadata(metadata_path):
+        try:
+            run_config = json.loads((result_dir / "run_config.json").read_text(encoding="utf-8"))
+            requested_rounds = int(run_config["rounds"])
+            latest_round = int(metadata["latest_round"])
+            best_round = int(metadata["best_round"])
+            best_score = float(metadata["best_official_score"])
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            continue
+        if (
+            requested_rounds > 0
+            and latest_round == requested_rounds
+            and 1 <= best_round <= latest_round
+            and math.isfinite(best_score)
+            and 0.0 <= best_score <= 100.0
+            and not (result_dir / "failure.json").exists()
+            and not (result_dir / "interruption.json").exists()
+        ):
+            return True
+    return False
 
 
 def find_best_e01_checkpoint() -> E01Checkpoint:
@@ -293,7 +345,14 @@ def find_best_e01_checkpoint() -> E01Checkpoint:
             "No compatible E01 best.pt was found. Pass --e01-resume explicitly."
         )
     score, _, path = max(candidates)
-    return E01Checkpoint(path=path, recorded_score=score, selection="highest_compatible_recorded_score")
+    return E01Checkpoint(
+        path=path,
+        recorded_score=score,
+        selection="highest_compatible_recorded_score",
+        scenario="E01",
+        source_batch=path.parent.parent.name,
+        sha256=_sha256_file(path),
+    )
 
 
 def _score_next_to_checkpoint(path: Path) -> float | None:
@@ -334,7 +393,132 @@ def resolve_e01_checkpoint(value: Path | None, invocation_cwd: Path) -> E01Check
         path=path,
         recorded_score=_score_next_to_checkpoint(path),
         selection="explicit",
+        scenario="E01",
+        source_batch=path.parent.parent.name,
+        latest_round=int(metadata["latest_round"]),
+        best_round=int(metadata["best_round"]),
+        interrupted=False,
+        sha256=_sha256_file(path),
     )
+
+
+def _resolve_resume_batch_root(value: Path, invocation_cwd: Path) -> Path:
+    supplied = value.expanduser()
+    if supplied.is_absolute():
+        root = supplied.resolve()
+    elif len(supplied.parts) == 1 and supplied.name not in {".", ".."}:
+        root = (MODELS_ROOT / supplied).resolve()
+    else:
+        root = (invocation_cwd / supplied).resolve()
+    models_root = MODELS_ROOT.resolve()
+    if root.parent != models_root:
+        raise ValueError(
+            f"--resume-batch must identify one direct batch directory below {models_root}: {root}"
+        )
+    if not root.is_dir():
+        raise FileNotFoundError(f"Resume models batch does not exist: {root}")
+    return root
+
+
+def _source_run_config(source_root: Path, scenario: str) -> tuple[Path, dict[str, Any]]:
+    relative_dir = source_root.relative_to(MODELS_ROOT.resolve()) / scenario
+    candidates = (
+        RESULTS_ROOT / relative_dir / "run_config.json",
+        RESULTS_ROOT / "results_past" / relative_dir / "run_config.json",
+    )
+    for path in candidates:
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+            raise ValueError(f"Source run_config.json is invalid: {path}") from error
+        if not isinstance(config, dict):
+            raise ValueError(f"Source run_config.json must contain an object: {path}")
+        actual = str(config.get("scenario", "")).upper()
+        if actual != scenario:
+            raise ValueError(
+                f"Resume checkpoint scenario mismatch for {scenario}: run_config identifies {actual or 'none'}"
+            )
+        return path, config
+    rendered = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(
+        f"Cannot verify the source scenario for {scenario}; run_config.json not found in: {rendered}"
+    )
+
+
+def _validate_recorded_checkpoint(checkpoint: Path, validation_path: Path) -> None:
+    if not validation_path.is_file():
+        return
+    try:
+        validation = json.loads(validation_path.read_text(encoding="utf-8"))
+        record = validation["checkpoints"][checkpoint.name]
+        expected_size = int(record["size_bytes"])
+        expected_digest = str(record["sha256"])
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+        raise ValueError(f"Checkpoint validation manifest is invalid: {validation_path}") from error
+    if (
+        expected_size != checkpoint.stat().st_size
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
+        or expected_digest != _sha256_file(checkpoint)
+    ):
+        raise ValueError(f"Checkpoint does not match its validation manifest: {checkpoint}")
+
+
+def resolve_resume_batch(
+    value: Path,
+    scenarios: Sequence[str],
+    invocation_cwd: Path,
+) -> dict[str, ScenarioCheckpoint]:
+    """Resolve one coherent historical models batch into per-scenario best weights."""
+
+    source_root = _resolve_resume_batch_root(value, invocation_cwd)
+    selected: dict[str, ScenarioCheckpoint] = {}
+    for scenario in scenarios:
+        model_dir = source_root / scenario
+        metadata_path = model_dir / "model_metadata.json"
+        checkpoint = model_dir / "best.pt"
+        if not checkpoint.is_file():
+            raise FileNotFoundError(f"Resume checkpoint does not exist for {scenario}: {checkpoint}")
+        resolved_checkpoint = checkpoint.resolve()
+        if resolved_checkpoint.parent != model_dir.resolve():
+            raise ValueError(f"Resume checkpoint must not redirect outside its scenario directory: {checkpoint}")
+        _container_personal_path(resolved_checkpoint)
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(f"Checkpoint metadata is missing or invalid: {metadata_path}") from error
+        if not _current_checkpoint_metadata(metadata, allow_interrupted=True):
+            raise ValueError(f"Checkpoint metadata has an incompatible schema: {metadata_path}")
+        try:
+            latest_round = int(metadata["latest_round"])
+            best_round = int(metadata["best_round"])
+            recorded_score = float(metadata["best_official_score"])
+        except (ValueError, TypeError, KeyError) as error:
+            raise ValueError(f"Checkpoint metadata has invalid best/latest fields: {metadata_path}") from error
+        if (
+            latest_round <= 0
+            or not 1 <= best_round <= latest_round
+            or not math.isfinite(recorded_score)
+            or not 0.0 <= recorded_score <= 100.0
+        ):
+            raise ValueError(f"Checkpoint metadata has invalid best/latest fields: {metadata_path}")
+        _source_run_config(source_root, scenario)
+        if _model_scenario(metadata_path) != scenario:
+            raise ValueError(f"Resume checkpoint metadata does not identify scenario {scenario}: {metadata_path}")
+        _validate_recorded_checkpoint(checkpoint, model_dir / "checkpoint_validation.json")
+        selected[scenario] = ScenarioCheckpoint(
+            path=resolved_checkpoint,
+            recorded_score=recorded_score,
+            selection="explicit_resume_batch",
+            scenario=scenario,
+            source_batch=source_root.name,
+            latest_round=latest_round,
+            best_round=best_round,
+            interrupted=bool(metadata.get("interrupted", False)),
+            sha256=_sha256_file(checkpoint),
+        )
+    return selected
 
 
 def _container_personal_path(host_path: Path) -> str:
@@ -348,30 +532,59 @@ def _container_personal_path(host_path: Path) -> str:
     return str(PERSONAL_IN_CONTAINER / relative)
 
 
-def make_batch_id(value: str | None, now: datetime | None = None) -> str:
+def make_run_timestamp(now: datetime | None = None) -> str:
+    return (now or datetime.now()).strftime("%Y%m%d_%H%M%S_%f")
+
+
+def make_batch_id(
+    value: str | None,
+    now: datetime | None = None,
+    *,
+    timestamp: str | None = None,
+) -> str:
     if value is not None:
         if not _SAFE_ID.fullmatch(value):
             raise ValueError("Invalid batch ID")
         return value
-    timestamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S_%f")
+    timestamp = timestamp or make_run_timestamp(now)
+    if not _RUN_TIMESTAMP.fullmatch(timestamp):
+        raise ValueError(f"Invalid run timestamp: {timestamp}")
     return f"r9_multi_{timestamp}"
+
+
+def _checkpoint_mapping(
+    checkpoints: Mapping[str, ScenarioCheckpoint] | ScenarioCheckpoint | None,
+) -> dict[str, ScenarioCheckpoint]:
+    if checkpoints is None:
+        return {}
+    if isinstance(checkpoints, ScenarioCheckpoint):
+        return {checkpoints.scenario: checkpoints}
+    return {str(scenario).upper(): checkpoint for scenario, checkpoint in checkpoints.items()}
 
 
 def build_job_plans(
     scenarios: Sequence[str],
-    batch_id: str,
-    e01_checkpoint: E01Checkpoint | None,
+    timestamp: str,
+    checkpoints: Mapping[str, ScenarioCheckpoint] | ScenarioCheckpoint | None,
 ) -> list[JobPlan]:
+    if not _RUN_TIMESTAMP.fullmatch(timestamp):
+        raise ValueError("Output timestamp must use YYYYMMDD_HHMMSS_microseconds")
+    checkpoint_by_scenario = _checkpoint_mapping(checkpoints)
     plans = []
     for scenario in scenarios:
-        checkpoint = e01_checkpoint if scenario == "E01" else None
+        checkpoint = checkpoint_by_scenario.get(scenario)
         if scenario == "E01" and checkpoint is None:
             raise ValueError("E01 requires an existing best checkpoint")
+        if checkpoint is not None and checkpoint.scenario != scenario:
+            raise ValueError(
+                f"Checkpoint scenario mismatch: plan={scenario} checkpoint={checkpoint.scenario}"
+            )
+        run_name = f"{scenario.lower()}_r9_ppo_{timestamp}"
         plans.append(
             JobPlan(
                 scenario=scenario,
-                result_dir=RESULTS_ROOT / batch_id / scenario,
-                model_dir=MODELS_ROOT / batch_id / scenario,
+                result_dir=RESULTS_ROOT / run_name,
+                model_dir=MODELS_ROOT / run_name,
                 resume=checkpoint.path if checkpoint else None,
                 initial_score=checkpoint.recorded_score if checkpoint else None,
             )
@@ -379,14 +592,55 @@ def build_job_plans(
     return plans
 
 
-def validate_batch_roots(batch_id: str) -> tuple[Path, Path]:
-    result_root = RESULTS_ROOT / batch_id
-    model_root = MODELS_ROOT / batch_id
-    if result_root.exists() or model_root.exists():
-        raise FileExistsError(
-            f"Batch output already exists; choose another --batch-id: {batch_id}"
+def _launcher_run_root(batch_id: str) -> Path:
+    if not _SAFE_ID.fullmatch(batch_id):
+        raise ValueError(f"Invalid batch ID: {batch_id}")
+    return validate_personal_output_path(LAUNCHER_RUNS_ROOT / batch_id)
+
+
+def validate_batch_outputs(batch_id: str, plans: Sequence[JobPlan]) -> Path:
+    launcher_root = _launcher_run_root(batch_id)
+    if launcher_root.exists():
+        raise FileExistsError(f"Launcher run already exists: {launcher_root}")
+    resolved_results_root = RESULTS_ROOT.resolve()
+    resolved_models_root = MODELS_ROOT.resolve()
+    seen: set[Path] = set()
+    for plan in plans:
+        expected_name = re.compile(
+            rf"^{re.escape(plan.scenario.lower())}_r9_ppo_[0-9]{{8}}_[0-9]{{6}}_[0-9]{{6}}$"
         )
-    return result_root, model_root
+        result_dir = validate_personal_output_path(plan.result_dir)
+        model_dir = validate_personal_output_path(plan.model_dir)
+        if result_dir.parent != resolved_results_root or model_dir.parent != resolved_models_root:
+            raise ValueError(
+                "Scenario outputs must be direct children of personal_train/results and personal_train/models"
+            )
+        if result_dir.name != model_dir.name or not expected_name.fullmatch(result_dir.name):
+            raise ValueError(
+                f"Invalid scenario output name for {plan.scenario}: {result_dir.name} / {model_dir.name}"
+            )
+        if result_dir in seen or model_dir in seen:
+            raise ValueError("Scenario output paths must be unique")
+        seen.update((result_dir, model_dir))
+        existing = [str(path) for path in (result_dir, model_dir) if path.exists()]
+        if existing:
+            raise FileExistsError("Training output already exists: " + ", ".join(existing))
+        if plan.resume is not None and not plan.resume.resolve().is_file():
+            raise FileNotFoundError(f"Resume checkpoint does not exist: {plan.resume}")
+    return launcher_root
+
+
+def validate_batch_roots(
+    batch_id: str, plans: Sequence[JobPlan] | None = None
+) -> tuple[Path, Path] | Path:
+    """Compatibility wrapper; new callers validate all flat output leaves."""
+
+    if plans is not None:
+        return validate_batch_outputs(batch_id, plans)
+    launcher_root = _launcher_run_root(batch_id)
+    if launcher_root.exists():
+        raise FileExistsError(f"Launcher run already exists: {launcher_root}")
+    return launcher_root, launcher_root
 
 
 def _container_name(batch_id: str, scenario: str) -> str:
@@ -403,8 +657,10 @@ def docker_command(
     uid: int,
     gid: int,
     username: str,
+    launcher_root: Path | None = None,
 ) -> list[str]:
-    cidfile = plan.result_dir.parent / "launcher_logs" / f"{plan.scenario}.cid"
+    control_root = launcher_root or _launcher_run_root(args.batch_id)
+    cidfile = control_root / "launcher_logs" / f"{plan.scenario}.cid"
     command = [
         args.docker,
         "run",
@@ -441,15 +697,19 @@ def docker_command(
             "-e",
             "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor",
             "-e",
+            "COMPETITION_REPO_ROOT=/opt/competition-platform-env",
+            "-e",
+            "PERSONAL_NATIVE_RESULTS=/app/Results",
+            "-e",
             f"OMP_NUM_THREADS={args.threads_per_worker}",
             "-e",
             f"MKL_NUM_THREADS={args.threads_per_worker}",
             "-e",
             f"OPENBLAS_NUM_THREADS={args.threads_per_worker}",
-            "-v",
-            f"{PERSONAL_ROOT.resolve()}:/app/personal_train:rw",
-            "-v",
-            f"{SCENARIOS_ROOT.resolve()}:/app/scenarios:ro",
+            "--mount",
+            f"type=bind,src={PERSONAL_ROOT.resolve()},dst=/app/personal_train",
+            "--mount",
+            f"type=bind,src={REPOSITORY_ROOT.resolve()},dst=/opt/competition-platform-env,readonly",
             "-w",
             "/app",
             args.image,
@@ -468,7 +728,7 @@ def docker_command(
             "--render-mode",
             "none",
             "--run-id",
-            plan.scenario.lower(),
+            plan.run_name,
             "--result-dir",
             _container_personal_path(plan.result_dir),
             "--model-dir",
@@ -487,7 +747,10 @@ def docker_command(
     return command
 
 
-def _empty_state(plans: Sequence[JobPlan]) -> dict[str, dict[str, Any]]:
+def _empty_state(
+    plans: Sequence[JobPlan], launcher_root: Path | None = None
+) -> dict[str, dict[str, Any]]:
+    control_root = launcher_root or LAUNCHER_RUNS_ROOT / "unassigned"
     return {
         plan.scenario: {
             "status": "pending",
@@ -499,7 +762,7 @@ def _empty_state(plans: Sequence[JobPlan]) -> dict[str, dict[str, Any]]:
             "device": None,
             "container": None,
             "container_id": None,
-            "cidfile": str(plan.result_dir.parent / "launcher_logs" / f"{plan.scenario}.cid"),
+            "cidfile": str(control_root / "launcher_logs" / f"{plan.scenario}.cid"),
             "pid": None,
             "started_at": None,
             "finished_at": None,
@@ -941,17 +1204,61 @@ def _stop_containers(args: argparse.Namespace, active: dict[str, RunningJob]) ->
     )
 
 
-def run_batch(args: argparse.Namespace, plans: Sequence[JobPlan], checkpoint: E01Checkpoint | None) -> int:
-    result_root, model_root = validate_batch_roots(args.batch_id)
-    result_root.mkdir(parents=True, exist_ok=False)
-    model_root.mkdir(parents=True, exist_ok=False)
-    logs_root = result_root / "launcher_logs"
+def _username_for_uid(uid: int) -> str:
+    """Numeric Docker users need not have an entry in /etc/passwd."""
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return f"uid{uid}"
+
+
+def _checkpoint_document(checkpoint: ScenarioCheckpoint) -> dict[str, Any]:
+    digest = _sha256_file(checkpoint.path) if checkpoint.path.is_file() else None
+    if checkpoint.sha256 is not None and digest != checkpoint.sha256:
+        raise ValueError(f"Resume checkpoint changed after validation: {checkpoint.path}")
+    return {
+        "scenario": checkpoint.scenario,
+        "path": str(checkpoint.path.resolve()),
+        "source_batch": checkpoint.source_batch,
+        "selection": checkpoint.selection,
+        "recorded_best_score": checkpoint.recorded_score,
+        "recorded_best_round": checkpoint.best_round,
+        "recorded_latest_round": checkpoint.latest_round,
+        "source_run_interrupted": checkpoint.interrupted,
+        "sha256": digest,
+        "resume_mode_expected": "current_weights_only",
+        "resume_semantics": "network weights initialization; optimizer, counters, and RNG are not restored",
+    }
+
+
+def run_batch(
+    args: argparse.Namespace,
+    plans: Sequence[JobPlan],
+    checkpoints: Mapping[str, ScenarioCheckpoint] | ScenarioCheckpoint | None,
+) -> int:
+    checkpoint_by_scenario = _checkpoint_mapping(checkpoints)
+    planned_resumes = {plan.scenario: plan.resume for plan in plans if plan.resume is not None}
+    if set(planned_resumes) != set(checkpoint_by_scenario):
+        raise ValueError("Every planned resume must have exactly one provenance record")
+    for scenario, resume in planned_resumes.items():
+        if resume is None or resume.resolve() != checkpoint_by_scenario[scenario].path.resolve():
+            raise ValueError(f"Resume provenance path does not match the {scenario} job plan")
+    launcher_root = validate_batch_outputs(args.batch_id, plans)
+    RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
+    MODELS_ROOT.mkdir(parents=True, exist_ok=True)
+    LAUNCHER_RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+    launcher_root.mkdir(parents=True, exist_ok=False)
+    logs_root = launcher_root / "launcher_logs"
     logs_root.mkdir()
 
     uid, gid = os.getuid(), os.getgid()
-    username = pwd.getpwuid(uid).pw_name
+    username = _username_for_uid(uid)
     created_at = datetime.now().astimezone().isoformat()
-    states = _empty_state(plans)
+    states = _empty_state(plans, launcher_root)
+    resume_documents = {
+        scenario: _checkpoint_document(checkpoint)
+        for scenario, checkpoint in checkpoint_by_scenario.items()
+    }
     config = {
         "batch_id": args.batch_id,
         "created_at": created_at,
@@ -965,22 +1272,18 @@ def run_batch(args: argparse.Namespace, plans: Sequence[JobPlan], checkpoint: E0
         "max_parallel": args.max_parallel,
         "gpu_sharing": args.max_parallel > len(args.devices),
         "threads_per_worker": args.threads_per_worker,
-        "results_root": str(result_root),
-        "models_root": str(model_root),
+        "results_root": str(RESULTS_ROOT.resolve()),
+        "models_root": str(MODELS_ROOT.resolve()),
+        "launcher_run_dir": str(launcher_root),
         "native_results_isolation": "one Docker tmpfs /app/Results per scenario",
-        "e01_checkpoint": (
+        "resume_batches": sorted(
             {
-                "path": str(checkpoint.path),
-                "recorded_score": checkpoint.recorded_score,
-                "selection": checkpoint.selection,
-                "resume_semantics": (
-                    "network weights and saved PPO hyperparameters; "
-                    "new optimizer, counters, and RNG for best.pt"
-                ),
+                checkpoint.source_batch
+                for checkpoint in checkpoint_by_scenario.values()
+                if checkpoint.source_batch is not None
             }
-            if checkpoint is not None
-            else None
         ),
+        "resume_checkpoints": resume_documents,
         "jobs": [
             {
                 **asdict(plan),
@@ -988,18 +1291,23 @@ def run_batch(args: argparse.Namespace, plans: Sequence[JobPlan], checkpoint: E0
                 "model_dir": str(plan.model_dir),
                 "resume": str(plan.resume) if plan.resume else None,
                 "initialization": plan.initialization,
+                "source_checkpoint": resume_documents.get(plan.scenario),
             }
             for plan in plans
         ],
     }
-    _atomic_json(result_root / "batch_config.json", config)
+    _atomic_json(launcher_root / "batch_config.json", config)
     _atomic_json(
-        result_root / "batch_status.json",
+        launcher_root / "batch_status.json",
         _status_document(batch_id=args.batch_id, created_at=created_at, states=states, interrupted=False),
     )
-    write_batch_reports(result_root, batch_summary(plans, states))
-    print(f"BATCH_RESULT_DIR {result_root}", flush=True)
-    print(f"BATCH_MODEL_DIR {model_root}", flush=True)
+    write_batch_reports(launcher_root, batch_summary(plans, states))
+    print(f"LAUNCHER_RUN_DIR {launcher_root}", flush=True)
+    for plan in plans:
+        print(
+            f"OUTPUT {plan.scenario} result={plan.result_dir} model={plan.model_dir} resume={plan.resume}",
+            flush=True,
+        )
 
     pending = deque(plans)
     active: dict[str, RunningJob] = {}
@@ -1020,7 +1328,7 @@ def run_batch(args: argparse.Namespace, plans: Sequence[JobPlan], checkpoint: E0
 
     def persist(interrupted: bool = False) -> None:
         _atomic_json(
-            result_root / "batch_status.json",
+            launcher_root / "batch_status.json",
             _status_document(
                 batch_id=args.batch_id,
                 created_at=created_at,
@@ -1028,7 +1336,7 @@ def run_batch(args: argparse.Namespace, plans: Sequence[JobPlan], checkpoint: E0
                 interrupted=interrupted,
             ),
         )
-        write_batch_reports(result_root, batch_summary(plans, states))
+        write_batch_reports(launcher_root, batch_summary(plans, states))
 
     try:
         while pending or active:
@@ -1059,6 +1367,12 @@ def run_batch(args: argparse.Namespace, plans: Sequence[JobPlan], checkpoint: E0
                 )
                 log_stream = None
                 try:
+                    if plan.resume is not None:
+                        expected_digest = resume_documents[plan.scenario]["sha256"]
+                        if _sha256_file(plan.resume) != expected_digest:
+                            raise ValueError(
+                                f"Resume checkpoint changed before {plan.scenario} launch: {plan.resume}"
+                            )
                     command = docker_command(
                         args=args,
                         plan=plan,
@@ -1066,6 +1380,7 @@ def run_batch(args: argparse.Namespace, plans: Sequence[JobPlan], checkpoint: E0
                         uid=uid,
                         gid=gid,
                         username=username,
+                        launcher_root=launcher_root,
                     )
                     log_stream = log_path.open("w", encoding="utf-8", buffering=1)
                     log_stream.write(f"COMMAND {shlex.join(command)}\n")
@@ -1255,10 +1570,16 @@ def run_batch(args: argparse.Namespace, plans: Sequence[JobPlan], checkpoint: E0
 def _dry_run_document(
     args: argparse.Namespace,
     plans: Sequence[JobPlan],
-    checkpoint: E01Checkpoint | None,
+    checkpoints: Mapping[str, ScenarioCheckpoint] | ScenarioCheckpoint | None,
 ) -> dict[str, Any]:
     uid, gid = os.getuid(), os.getgid()
-    username = pwd.getpwuid(uid).pw_name
+    username = _username_for_uid(uid)
+    checkpoint_by_scenario = _checkpoint_mapping(checkpoints)
+    launcher_root = _launcher_run_root(args.batch_id)
+    resume_documents = {
+        scenario: _checkpoint_document(checkpoint)
+        for scenario, checkpoint in checkpoint_by_scenario.items()
+    }
     jobs = []
     for index, plan in enumerate(plans):
         slot = index % args.max_parallel
@@ -1271,6 +1592,7 @@ def _dry_run_document(
                 "result_dir": str(plan.result_dir),
                 "model_dir": str(plan.model_dir),
                 "resume": str(plan.resume) if plan.resume else None,
+                "source_checkpoint": resume_documents.get(plan.scenario),
                 "command": docker_command(
                     args=args,
                     plan=plan,
@@ -1278,6 +1600,7 @@ def _dry_run_document(
                     uid=uid,
                     gid=gid,
                     username=username,
+                    launcher_root=launcher_root,
                 ),
             }
         )
@@ -1287,7 +1610,8 @@ def _dry_run_document(
         "rounds_per_scenario": args.rounds,
         "max_parallel": args.max_parallel,
         "device_slots": list(args.devices),
-        "e01_checkpoint": asdict(checkpoint) if checkpoint is not None else None,
+        "launcher_run_dir": str(launcher_root),
+        "resume_checkpoints": resume_documents,
         "jobs": jobs,
     }
 
@@ -1457,15 +1781,31 @@ def main(argv: list[str] | None = None) -> int:
         raise FileNotFoundError(
             f"Scenario files are missing for: {', '.join(missing_scenarios)}"
         )
-    args.batch_id = make_batch_id(args.batch_id)
-    checkpoint = resolve_e01_checkpoint(args.e01_resume, invocation_cwd) if "E01" in args.scenarios else None
-    plans = build_job_plans(args.scenarios, args.batch_id, checkpoint)
-    validate_batch_roots(args.batch_id)
+    output_timestamp = make_run_timestamp()
+    args.batch_id = make_batch_id(args.batch_id, timestamp=output_timestamp)
+    if args.resume_batch is not None:
+        checkpoints: dict[str, ScenarioCheckpoint] = resolve_resume_batch(
+            args.resume_batch, args.scenarios, invocation_cwd
+        )
+    else:
+        checkpoints = {}
+        if "E01" in args.scenarios:
+            checkpoint = resolve_e01_checkpoint(args.e01_resume, invocation_cwd)
+            checkpoints["E01"] = checkpoint
+    plans = build_job_plans(args.scenarios, output_timestamp, checkpoints)
+    validate_batch_outputs(args.batch_id, plans)
     if args.dry_run:
-        print(json.dumps(_dry_run_document(args, plans, checkpoint), ensure_ascii=False, indent=2, default=str))
+        print(
+            json.dumps(
+                _dry_run_document(args, plans, checkpoints),
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            )
+        )
         return 0
     preflight_docker(args)
-    return run_batch(args, plans, checkpoint)
+    return run_batch(args, plans, checkpoints)
 
 
 if __name__ == "__main__":

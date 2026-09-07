@@ -1,0 +1,13 @@
+# Reuse the already verified local CUDA/X11 dependencies without downloading.
+# The upstream source is mounted read-only at runtime, never baked in here.
+ARG BASE_IMAGE=competition:ppo-ui
+FROM ${BASE_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    COMPETITION_REPO_ROOT=/opt/competition-platform-env \
+    PERSONAL_NATIVE_RESULTS=/app/Results \
+    TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor
+
+WORKDIR /app
+LABEL personal_train.layout="external-source-v1"
+CMD ["python3", "-c", "print('Dependency runtime ready. Mount the external source read-only and select a diagnostic command.')"]

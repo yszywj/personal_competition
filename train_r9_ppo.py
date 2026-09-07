@@ -24,11 +24,17 @@ sys.dont_write_bytecode = True
 
 # Support both ``python -m personal_train.train_r9_ppo`` and direct execution.
 PERSONAL_ROOT = Path(__file__).resolve().parent
-REPOSITORY_ROOT = PERSONAL_ROOT.parent
-if str(REPOSITORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPOSITORY_ROOT))
+_PACKAGE_PARENT = PERSONAL_ROOT.parent
+if str(_PACKAGE_PARENT) not in sys.path:
+    sys.path.insert(0, str(_PACKAGE_PARENT))
 
-from personal_train.bootstrap import CORE_ROOT, install_project_paths  # noqa: E402
+from personal_train.bootstrap import (  # noqa: E402
+    CORE_ROOT,
+    REPOSITORY_ROOT,
+    install_project_paths,
+    prepare_runtime_directory,
+    validate_personal_output_path,
+)
 
 install_project_paths()
 
@@ -254,8 +260,8 @@ def _run_directories(
     run_name = f"{label}_{timestamp}"
     return (
         run_name,
-        PERSONAL_ROOT / "results" / run_name,
-        PERSONAL_ROOT / "models" / run_name,
+        validate_personal_output_path(PERSONAL_ROOT / "results" / run_name),
+        validate_personal_output_path(PERSONAL_ROOT / "models" / run_name),
     )
 
 
@@ -283,8 +289,8 @@ def _resolve_run_directories(
             else (invocation_cwd / expanded).resolve()
         )
 
-    exact_result = resolve(result_dir)
-    exact_model = resolve(model_dir)
+    exact_result = validate_personal_output_path(resolve(result_dir))
+    exact_model = validate_personal_output_path(resolve(model_dir))
     if (
         exact_result == exact_model
         or exact_result in exact_model.parents
@@ -707,9 +713,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         reporter = TrainingReporter(result_dir)
 
-        # Existing simulator models use relative package resources.  This is
-        # /app in the image and <repository>/core in a source checkout.
-        os.chdir(CORE_ROOT)
+        # Keep relative native output outside the read-only upstream checkout.
+        # No copy of the upstream Python code is patched in this runtime tree.
+        native_results = os.environ.get("PERSONAL_NATIVE_RESULTS")
+        runtime_dir = prepare_runtime_directory(
+            result_dir / "runtime",
+            native_results=Path(native_results) if native_results else None,
+        )
+        os.chdir(runtime_dir)
         random.seed(args.seed)
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)

@@ -282,6 +282,23 @@ class AgentTransitionTests(unittest.TestCase):
 
 
 class ResetTests(unittest.TestCase):
+    def test_personal_environment_restores_every_simulator_clock(self):
+        first = SimpleNamespace(sim_time=999.0)
+        second = SimpleNamespace(sim_time=0.0)
+        factory = SimpleNamespace(get_all_simulators=lambda: [first, second])
+        environment = PersonalR9TrainingEnv.__new__(PersonalR9TrainingEnv)
+        environment.engine = SimpleNamespace(
+            profile=SimpleNamespace(
+                imagineProfile=SimpleNamespace(simTime=1_783_391_450_000)
+            ),
+            simulator_factory=factory,
+        )
+
+        environment._restore_simulator_clocks()
+
+        self.assertEqual(first.sim_time, 1_783_391_450_000.0)
+        self.assertEqual(second.sim_time, 1_783_391_450_000.0)
+
     def test_shared_commander_resets_once(self):
         class Commander:
             def __init__(self):
@@ -380,36 +397,46 @@ class RewardTests(unittest.TestCase):
         self.assertAlmostEqual(rewards[2], 0.375)
         self.assertNotIn("unsuccessful_loss", environment._episode_reward_components)
 
-    def test_first_destruction_team_reward_matches_official_score_increment(self):
+    def test_every_health_drop_matches_weighted_damage_score_increment(self):
         policy = RewardPolicy(
             scenario_id="E01",
             objective_ids=(51, 52),
             max_steps=1200,
             scenario_path=Path("unused.json"),
-            objective_weights=((51, 3.0), (52, 10.0)),
+            objective_weights=((51, 5.0), (52, 2.0)),
+            objective_initial_health=((51, 32.0), (52, 20.0)),
         )
         environment = PersonalR9TrainingEnv.__new__(PersonalR9TrainingEnv)
         environment.reward_config = R9RewardConfig()
         environment.reward_policy = policy
         environment._reward_tracker = RewardTracker(policy)
-        environment._seen_destroyed = set()
         environment._episode_reward_components = defaultdict(float)
         environment._raw_official_score_delta = 0.0
         environment.learning_team_size = 4
-        environment.current_step = 600
+        environment.current_step = 0
         environment.max_steps = 1200
         agents = [SimpleNamespace(agent_id=1), SimpleNamespace(agent_id=2)]
         rewards = {1: 0.0, 2: 0.0}
+        initial = {
+            "entities": {
+                51: {"health": 32.0},
+                52: {"health": 20.0},
+            }
+        }
+        environment._anchor_official_score(initial)
+        environment.current_step = 600
         current = {
             "entities": {
-                51: {"health": 0.0},
-                52: {"health": 1.0},
+                51: {"health": 16.0},
+                52: {"health": 20.0},
             }
         }
 
-        environment._credit_new_destructions(rewards, agents, current)
+        environment._credit_official_score_delta(rewards, agents, current)
 
-        expected = 100.0 * (3.0 / 13.0) * (0.8 + 0.2 * 0.5)
+        # 51 is only half damaged, proving that the new judge pays before
+        # destruction: 100 * (weight 5 * damage 1/2) / total weight 7.
+        expected = 100.0 * (5.0 * 0.5) / 7.0
         self.assertAlmostEqual(rewards[1], expected / 4.0)
         self.assertAlmostEqual(rewards[2], expected / 4.0)
         self.assertAlmostEqual(
@@ -417,10 +444,23 @@ class RewardTests(unittest.TestCase):
             expected / 2.0,
         )
         self.assertAlmostEqual(environment._raw_official_score_delta, expected)
-        # A repeated observation cannot pay the same destruction twice.
-        environment._credit_new_destructions(rewards, agents, current)
+        # A repeated observation cannot pay the same damage twice.
+        environment._credit_official_score_delta(rewards, agents, current)
         self.assertAlmostEqual(rewards[1], expected / 4.0)
         self.assertAlmostEqual(environment._raw_official_score_delta, expected)
+
+        # Later damage pays only the exact judge delta since the prior frame.
+        later = {
+            "entities": {
+                51: {"health": 0.0},
+                52: {"health": 10.0},
+            }
+        }
+        environment._credit_official_score_delta(rewards, agents, later)
+        final_score = 100.0 * (5.0 + 2.0 * 0.5) / 7.0
+        self.assertAlmostEqual(rewards[1], final_score / 4.0)
+        self.assertAlmostEqual(rewards[2], final_score / 4.0)
+        self.assertAlmostEqual(environment._raw_official_score_delta, final_score)
 
     def test_progress_is_bounded_potential_and_target_switch_reanchors(self):
         class Commander:

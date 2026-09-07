@@ -1,5 +1,33 @@
 # R9 PPO 独立训练器
 
+## 目录迁移状态（2026-09-07）
+
+当前目录已独立为 `/home/ry/competition/personal_train`，上游为平级的
+`competition-platform-env`。通用路径、只读挂载、设备依赖及容器基础环境已适配，
+新版 `pku` 的加权损伤评分接口也已适配。完整训练状态及仍待验证项目见
+迁移记录。
+请先阅读 [迁移与验证记录](MIGRATION.md)。
+
+当前九场景并行入口会为每个场景创建独立容器、原生输出 tmpfs，以及直接位于
+`results/` 和 `models/` 下的扁平单场景目录。推荐从指定历史批次中九个场景各自的
+`best.pt` 初始化：
+
+```bash
+cd /home/ry/competition/personal_train
+python3 train_r9_multi_scenario.py \
+  --rounds 100 \
+  --scenarios E01 E02 E03 M01 M02 M03 H01 H02 H03 \
+  --resume-batch r9_multi_20260906_151415_061752 \
+  --seed 3 \
+  --gpu-ids 0,1 \
+  --max-parallel 9 \
+  --allow-gpu-sharing \
+  --threads-per-worker 1 \
+  --image personal-competition:runtime
+```
+
+下方旧的手工 Docker 命令保留为迁移前历史说明，仍含失效路径，不要直接执行。
+
 本目录提供一个不修改竞赛项目其他文件的 R9 + PPO 训练入口。Actor 的竞赛接口保持不变：
 
 - 观测：90 维（原 85 维基础观测 + R9 的 5 维任务上下文）
@@ -31,16 +59,18 @@
 
 ## 奖励
 
-训练奖励与赛事最终评分严格分开。最终评分仍由项目原有 `RewardTracker` 按 `100 * (0.8K + 0.2T)` 计算；训练奖励不会写回 Actor 观测。
+训练奖励与赛事最终评分严格分开。最终评分由当前只读上游的 `RewardTracker`
+按加权损伤比例计算：普通目标、拦截阵地、无人船的权重分别为 `5:2:1`，
+每个目标按实际损失生命值比例计分，不含时间项。训练奖励不会写回 Actor 观测。
 
 默认训练奖励改为“正式分增量为主、有界 shaping 为辅”：
 
-- 每个目标首次摧毁时，产生该目标精确的正式评分增量：
-  `100 * 目标权重/总权重 * (0.8 + 0.2 * 剩余时间比例)`。每枚存活弹得到
+- 每次目标生命值下降时，直接通过上游 `RewardTracker` 的相邻状态分差产生
+  精确正式评分增量。每枚存活弹得到
   该值除以固定初始队伍规模，而不是除以当时幸存数，避免少数幸存者突然收到
   数十倍奖励；原始正式分增量另记为 `raw_official_score_delta`。
 - 实际掉血 shaping 降为 `1 * 目标权重 * 健康损失比例`。全场理论上限仅为
-  总目标权重（E01 为 13）；同时命中时仍按名义有效伤害近似归因，但总量只来自
+  总目标权重（旧九场景 E01 为 21）；同时命中时仍按名义有效伤害近似归因，但总量只来自
   真实 HP 下降。
 - 距离项改为与 PPO 折扣一致的 `gamma*Phi(s')-Phi(s)`，其中势函数相对
   “本次目标分配初始距离”定义，`Phi` 本身严格限制在 `[-0.1, +0.1]`；
@@ -192,9 +222,9 @@ variance、当前学习率/熵系数、实际 epoch 数和 KL 是否提前停止
 ## 九场景独立并发训练
 
 `train_r9_multi_scenario.py` 是宿主机调度器。它默认把九个场景全部加入队列、每个
-场景训练 100 轮；E01 从当前格式且历史记录分数最高的 `best.pt` 初始化，其余八个
-场景各自随机初始化。每个场景拥有独立 PPO、optimizer、RNG、结果和模型，不会把
-九个场景的经验混入同一网络。
+场景训练 100 轮。推荐用 `--resume-batch` 明确指定一个历史批次，此时 E01 到 H03
+分别读取该批次各自场景目录内的 `best.pt`；每个场景仍拥有独立 PPO、optimizer、
+RNG、结果和模型，不会把九个场景的经验混入同一网络。
 
 必须由宿主机运行这个脚本，而不是先进入一个训练容器。原生仿真库会在固定的
 `./Results/<模型>/<实体ID>/` 下写文件，而不同场景会复用实体 ID；调度器因此为
@@ -203,51 +233,65 @@ variance、当前学习率/熵系数、实际 epoch 数和 KL 是否提前停止
 先只验证完整计划，不创建目录或启动训练：
 
 ```bash
-cd /home/ry/competition-platform-env
-python3 personal_train/train_r9_multi_scenario.py \
+cd /home/ry/competition/personal_train
+python3 train_r9_multi_scenario.py \
   --rounds 100 \
-  --seed 2 \
+  --scenarios E01 E02 E03 M01 M02 M03 H01 H02 H03 \
+  --resume-batch r9_multi_20260906_151415_061752 \
+  --seed 3 \
   --gpu-ids 0,1 \
-  --max-parallel 2 \
-  --e01-resume /home/ry/competition-platform-env/personal_train/models/e01_r9_ppo_20260906_000206_444691/best.pt \
+  --max-parallel 9 \
+  --allow-gpu-sharing \
+  --threads-per-worker 1 \
+  --image personal-competition:runtime \
   --dry-run
 ```
 
-确认计划后，删除最后一行的 `--dry-run` 即可正式启动。`--e01-resume` 也可以省略；
-这时调度器会扫描 `personal_train/models`，只接受当前 schema 的 E01 模型，并选择
-`model_metadata.json` 中 `best_official_score` 最高者。显式指定路径更便于复现实验。
+确认计划后，删除最后一行的 `--dry-run` 即可正式启动。`--resume-batch` 会验证九个
+场景的 checkpoint、元数据和来源，并把实际路径及哈希写入调度清单，便于复现实验。
+旧接口 `--e01-resume /绝对路径/best.pt` 仍保留，用于只给 E01 指定初始化权重、其余
+场景随机初始化；它不能与 `--resume-batch` 同时使用。两者都省略时，调度器仍可扫描
+`models` 选择兼容的 E01 模型，但九场景续训不推荐依赖这种隐式选择。
 
 当前服务器有两张 GPU，默认并发数也是 2：九个任务同时进入队列，每次运行两个，
 完成后自动补入下一个。每个容器只看见分配给自己的单张 GPU。可以显式使用
 `--max-parallel 9 --allow-gpu-sharing` 让九个全开，但会让多个进程争用两张 GPU、CPU
 和内存，通常更慢，也更容易显存不足。
 
-共同批次目录只生成一次时间戳，场景目录下不会再套时间目录：
+同一批次共享一次时间戳，但九个场景的结果和模型都是各自直接位于根目录下的
+单层目录；批次级状态、日志和汇总单独放入 `launcher_runs/`：
 
 ```text
 personal_train/
-├── results/r9_multi_<timestamp>/
-│   ├── batch_config.json
-│   ├── batch_status.json
-│   ├── batch_scores.txt
-│   ├── batch_summary.csv
-│   ├── batch_summary.json
-│   ├── batch_dashboard.svg
-│   ├── launcher_logs/E01.log ... H03.log
-│   ├── E01/                    # 原单场景全部文字、JSON、CSV、SVG
-│   ├── E02/
-│   └── ... H03/
-└── models/r9_multi_<same timestamp>/
-    ├── E01/                    # best.pt、latest.pt、checkpoint_validation.json、checkpoints/
-    ├── E02/
-    └── ... H03/
+├── results/
+│   ├── e01_r9_ppo_<timestamp>/ # E01 的文字、JSON、CSV、SVG
+│   ├── e02_r9_ppo_<timestamp>/
+│   └── ... h03_r9_ppo_<timestamp>/
+├── models/
+│   ├── e01_r9_ppo_<timestamp>/ # best.pt、latest.pt、checkpoints/
+│   ├── e02_r9_ppo_<timestamp>/
+│   └── ... h03_r9_ppo_<timestamp>/
+└── launcher_runs/r9_multi_<timestamp>/
+    ├── batch_config.json
+    ├── batch_status.json
+    ├── batch_scores.txt
+    ├── batch_summary.csv
+    ├── batch_summary.json
+    ├── batch_dashboard.svg
+    └── launcher_logs/E01.log ... H03.log
 ```
 
-E01 的源 `best.pt` 提供网络权重和保存时的 PPO 超参数；optimizer、计数器与随机流
-重新初始化，再训练 100 轮，新回合从 1 编号。批次汇总分别保留历史初始分、本批次最佳分和两者中的最高分；
+使用 `--resume-batch` 时，每个场景自己的源 `best.pt` 提供网络权重和保存时的 PPO
+超参数；optimizer、计数器与随机流重新初始化，再训练 100 轮，新回合从 1 编号。
+批次汇总分别保留历史初始分、本批次最佳分和两者中的最高分；
 源 checkpoint 不会被覆盖。某个场景失败不会终止其他场景，错误码和日志会写入
 批次状态。按 Ctrl-C 或向调度器发送 SIGTERM 时，它会先向所有活动容器转发
 SIGTERM，给单场景训练器保存 `interrupted.pt` 的机会。
+
+2026-09-07 实际启动批次为 `r9_multi_20260907_151202_805457`，九个 worker 均已
+启动。其九个源 checkpoint 全部来自
+`models/r9_multi_20260906_151415_061752/<SCENE>/best.pt`；已中止的
+`r9_multi_20260907_seed3_100r` 不作为任何场景的续训来源。
 
 上述主命令已经使用宿主 UID/GID 写 `personal_train`，新结果会直接属于当前用户；`/app/Results` 则是随容器删除的可写 tmpfs。这个组合适配本服务器的 root-squash 文件系统。不要再用容器 root 写宿主结果，也不要把 `/app` 整体设成只读。
 
@@ -256,16 +300,20 @@ SIGTERM，给单场景训练器保存 `interrupted.pt` 的机会。
 在已经包含依赖的镜像内运行：
 
 ```bash
-docker run --rm \
+docker run --rm --network none \
+  --user "$(id -u):$(id -g)" \
+  --mount type=bind,src=/home/ry/competition/personal_train,dst=/app/personal_train \
+  --mount type=bind,src=/home/ry/competition/competition-platform-env,dst=/opt/competition-platform-env,readonly \
   -e PYTHONDONTWRITEBYTECODE=1 \
-  -v /home/ry/competition-platform-env/personal_train:/app/personal_train:rw \
-  -v /home/ry/competition-platform-env/scenarios:/app/scenarios:ro \
-  -w /app \
-  competition:ppo \
+  -e COMPETITION_REPO_ROOT=/opt/competition-platform-env \
+  personal-competition:runtime \
   python3 -m unittest -v \
+    personal_train.test_layout \
     personal_train.test_personal_train \
     personal_train.test_multi_scenario
 ```
+
+当前完整容器回归测试共 68 项。
 
 ## 有意保留的竞赛边界
 

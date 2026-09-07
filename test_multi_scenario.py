@@ -17,37 +17,104 @@ from unittest import mock
 from personal_train import train_r9_multi_scenario as multi
 
 
+TIMESTAMP = "20260907_150000_123456"
+
+
+def _checkpoint(scenario: str, *, root: Path | None = None) -> multi.ScenarioCheckpoint:
+    base = root or multi.PERSONAL_ROOT / "models" / "source_batch"
+    return multi.ScenarioCheckpoint(
+        path=base / scenario / "best.pt",
+        recorded_score=80.5,
+        selection="test",
+        scenario=scenario,
+        source_batch="source_batch",
+        latest_round=100,
+        best_round=75,
+        interrupted=scenario.startswith("H"),
+        sha256="a" * 64,
+    )
+
+
+def _write_resume_source(
+    root: Path,
+    scenarios,
+    *,
+    mismatch: str | None = None,
+) -> tuple[Path, Path]:
+    models_root = root / "models"
+    results_root = root / "results"
+    batch = models_root / "source_batch"
+    for scenario in scenarios:
+        model_dir = batch / scenario
+        result_dir = results_root / "results_past" / "source_batch" / scenario
+        model_dir.mkdir(parents=True)
+        result_dir.mkdir(parents=True)
+        (model_dir / "best.pt").write_bytes(f"checkpoint-{scenario}".encode())
+        (model_dir / "model_metadata.json").write_text(
+            json.dumps(
+                {
+                    "checkpoint_schema": {
+                        "name": multi.CURRENT_SCHEMA_NAME,
+                        "version": multi.CURRENT_SCHEMA_VERSION,
+                    },
+                    "algorithm": multi.CURRENT_ALGORITHM,
+                    "latest_round": 40 if scenario.startswith("H") else 100,
+                    "best_round": 38 if scenario.startswith("H") else 75,
+                    "best_official_score": 80.5,
+                    "interrupted": scenario.startswith("H"),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (result_dir / "run_config.json").write_text(
+            json.dumps({"scenario": mismatch if mismatch == scenario else scenario, "rounds": 100})
+            + "\n",
+            encoding="utf-8",
+        )
+    return models_root, results_root
+
+
 class PlanTests(unittest.TestCase):
     def setUp(self):
-        self.checkpoint = multi.E01Checkpoint(
-            path=multi.PERSONAL_ROOT / "models" / "source_e01" / "best.pt",
-            recorded_score=80.5,
-            selection="test",
-        )
+        self.checkpoint = _checkpoint("E01")
 
-    def test_default_plan_has_nine_independent_jobs_and_only_e01_resumes(self):
+    def test_numeric_container_uid_does_not_require_a_passwd_entry(self):
+        with mock.patch.object(multi.pwd, "getpwuid", side_effect=KeyError):
+            self.assertEqual(multi._username_for_uid(1011), "uid1011")
+
+    def test_host_username_is_preserved(self):
+        with mock.patch.object(
+            multi.pwd, "getpwuid", return_value=SimpleNamespace(pw_name="trainer")
+        ):
+            self.assertEqual(multi._username_for_uid(1011), "trainer")
+
+    def test_resume_batch_plan_has_nine_flat_named_jobs_and_all_resume(self):
+        checkpoints = {scenario: _checkpoint(scenario) for scenario in multi.ALL_SCENARIOS}
         plans = multi.build_job_plans(
             multi.ALL_SCENARIOS,
-            "r9_multi_test",
-            self.checkpoint,
+            TIMESTAMP,
+            checkpoints,
         )
 
         self.assertEqual([plan.scenario for plan in plans], list(multi.ALL_SCENARIOS))
         self.assertEqual(len(plans), 9)
-        self.assertEqual(plans[0].resume, self.checkpoint.path)
-        self.assertTrue(all(plan.resume is None for plan in plans[1:]))
+        self.assertTrue(all(plan.resume == checkpoints[plan.scenario].path for plan in plans))
         self.assertTrue(
             all(
-                plan.result_dir == multi.RESULTS_ROOT / "r9_multi_test" / plan.scenario
+                plan.result_dir
+                == multi.RESULTS_ROOT / f"{plan.scenario.lower()}_r9_ppo_{TIMESTAMP}"
                 for plan in plans
             )
         )
         self.assertTrue(
             all(
-                plan.model_dir == multi.MODELS_ROOT / "r9_multi_test" / plan.scenario
+                plan.model_dir
+                == multi.MODELS_ROOT / f"{plan.scenario.lower()}_r9_ppo_{TIMESTAMP}"
                 for plan in plans
             )
         )
+        self.assertTrue(all(plan.result_dir.name == plan.model_dir.name for plan in plans))
 
     def test_parser_defaults_to_two_gpu_slots_and_rejects_accidental_sharing(self):
         args = multi.parse_args([])
@@ -71,7 +138,7 @@ class PlanTests(unittest.TestCase):
             ]
         )
         args.batch_id = "r9_multi_test"
-        plan = multi.build_job_plans(("E01",), args.batch_id, self.checkpoint)[0]
+        plan = multi.build_job_plans(("E01",), TIMESTAMP, self.checkpoint)[0]
         command = multi.docker_command(
             args=args,
             plan=plan,
@@ -87,14 +154,33 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(command[trainer_device_index + 1], "cuda:0")
         self.assertEqual(command[command.index("--scenario") + 1], "E01")
         self.assertIn("--resume", command)
-        self.assertEqual(command[command.index("--result-dir") + 1], "/app/personal_train/results/r9_multi_test/E01")
+        self.assertEqual(
+            command[command.index("--result-dir") + 1],
+            f"/app/personal_train/results/e01_r9_ppo_{TIMESTAMP}",
+        )
+        self.assertEqual(command[command.index("--run-id") + 1], plan.run_name)
+        self.assertEqual(
+            command[command.index("--cidfile") + 1],
+            str(multi.LAUNCHER_RUNS_ROOT / "r9_multi_test" / "launcher_logs" / "E01.cid"),
+        )
+        self.assertIn("COMPETITION_REPO_ROOT=/opt/competition-platform-env", command)
+        self.assertIn("PERSONAL_NATIVE_RESULTS=/app/Results", command)
+        self.assertIn(
+            f"type=bind,src={multi.REPOSITORY_ROOT.resolve()},dst=/opt/competition-platform-env,readonly",
+            command,
+        )
+        self.assertIn(
+            f"type=bind,src={multi.PERSONAL_ROOT.resolve()},dst=/app/personal_train",
+            command,
+        )
+        self.assertNotIn("-v", command)
 
     def test_cpu_job_omits_docker_gpu_option(self):
         args = multi.parse_args(
             ["--scenarios", "E02", "--batch-id", "cpu_test", "--gpu-ids", "cpu"]
         )
         args.batch_id = "cpu_test"
-        plan = multi.build_job_plans(("E02",), args.batch_id, None)[0]
+        plan = multi.build_job_plans(("E02",), TIMESTAMP, None)[0]
         command = multi.docker_command(
             args=args,
             plan=plan,
@@ -108,14 +194,76 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(command[command.index("--device") + 1], "cpu")
         self.assertNotIn("--resume", command)
 
-    def test_existing_batch_root_is_rejected_before_launch(self):
+    def test_existing_flat_output_is_rejected_before_launch(self):
         with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:
             root = Path(directory)
-            (root / "results" / "taken").mkdir(parents=True)
             with mock.patch.object(multi, "RESULTS_ROOT", root / "results"), mock.patch.object(
                 multi, "MODELS_ROOT", root / "models"
-            ), self.assertRaises(FileExistsError):
-                multi.validate_batch_roots("taken")
+            ), mock.patch.object(multi, "LAUNCHER_RUNS_ROOT", root / "launcher_runs"):
+                plans = multi.build_job_plans(("E02",), TIMESTAMP, None)
+                plans[0].result_dir.mkdir(parents=True)
+                with self.assertRaises(FileExistsError):
+                    multi.validate_batch_outputs("r9_multi_test", plans)
+
+    def test_flat_output_symlink_is_rejected_before_any_directory_is_created(self):
+        with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:
+            root = Path(directory)
+            (root / "redirect").symlink_to(multi.REPOSITORY_ROOT, target_is_directory=True)
+            for redirected in ("RESULTS_ROOT", "MODELS_ROOT"):
+                with self.subTest(redirected=redirected), mock.patch.object(
+                    multi, "RESULTS_ROOT", root / "results"
+                ), mock.patch.object(multi, "MODELS_ROOT", root / "models"), mock.patch.object(
+                    multi, "LAUNCHER_RUNS_ROOT", root / "launcher_runs"
+                ), mock.patch.object(multi, redirected, root / "redirect"):
+                    plans = multi.build_job_plans(("E02",), TIMESTAMP, None)
+                    with self.assertRaises(ValueError):
+                        multi.validate_batch_outputs("must-not-create", plans)
+            self.assertFalse((root / "results").exists())
+            self.assertFalse((root / "models").exists())
+
+    def test_resume_batch_accepts_interrupted_source_and_records_provenance(self):
+        with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:
+            root = Path(directory)
+            models_root, results_root = _write_resume_source(root, ("E01", "H01"))
+            with mock.patch.object(multi, "MODELS_ROOT", models_root), mock.patch.object(
+                multi, "RESULTS_ROOT", results_root
+            ):
+                selected = multi.resolve_resume_batch(
+                    Path("source_batch"), ("E01", "H01"), root
+                )
+                selected_by_path = multi.resolve_resume_batch(
+                    models_root / "source_batch", ("E01", "H01"), root
+                )
+
+            self.assertEqual(set(selected), {"E01", "H01"})
+            self.assertEqual(selected_by_path["E01"].path, selected["E01"].path)
+            self.assertTrue(selected["H01"].interrupted)
+            self.assertEqual(selected["H01"].best_round, 38)
+            self.assertRegex(selected["H01"].sha256 or "", r"^[0-9a-f]{64}$")
+
+    def test_resume_batch_rejects_scenario_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:
+            root = Path(directory)
+            models_root, results_root = _write_resume_source(root, ("E01",), mismatch="E01")
+            config_path = results_root / "results_past" / "source_batch" / "E01" / "run_config.json"
+            config_path.write_text(json.dumps({"scenario": "E02", "rounds": 100}), encoding="utf-8")
+            with mock.patch.object(multi, "MODELS_ROOT", models_root), mock.patch.object(
+                multi, "RESULTS_ROOT", results_root
+            ), self.assertRaises(ValueError):
+                multi.resolve_resume_batch(Path("source_batch"), ("E01",), root)
+
+    def test_resume_batch_rejects_schema_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:
+            root = Path(directory)
+            models_root, results_root = _write_resume_source(root, ("E01",))
+            metadata_path = models_root / "source_batch" / "E01" / "model_metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["checkpoint_schema"]["version"] = multi.CURRENT_SCHEMA_VERSION - 1
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            with mock.patch.object(multi, "MODELS_ROOT", models_root), mock.patch.object(
+                multi, "RESULTS_ROOT", results_root
+            ), self.assertRaises(ValueError):
+                multi.resolve_resume_batch(Path("source_batch"), ("E01",), root)
 
 
 class BatchReportingTests(unittest.TestCase):
@@ -400,6 +548,7 @@ class SchedulerSmokeTests(unittest.TestCase):
             root = Path(directory)
             results_root = root / "results"
             models_root = root / "models"
+            launcher_runs_root = root / "launcher_runs"
             args = multi.parse_args(
                 [
                     "--scenarios",
@@ -414,15 +563,22 @@ class SchedulerSmokeTests(unittest.TestCase):
                 ]
             )
             args.batch_id = "scheduler_test"
+            source = root / "source" / "E01" / "best.pt"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"source checkpoint")
             checkpoint = multi.E01Checkpoint(
-                path=multi.PERSONAL_ROOT / "models" / "source" / "best.pt",
+                path=source,
                 recorded_score=80.5,
                 selection="test",
+                scenario="E01",
+                source_batch="source",
+                latest_round=100,
+                best_round=72,
             )
             with mock.patch.object(multi, "RESULTS_ROOT", results_root), mock.patch.object(
                 multi, "MODELS_ROOT", models_root
-            ):
-                plans = multi.build_job_plans(("E01", "E02"), args.batch_id, checkpoint)
+            ), mock.patch.object(multi, "LAUNCHER_RUNS_ROOT", launcher_runs_root):
+                plans = multi.build_job_plans(("E01", "E02"), TIMESTAMP, checkpoint)
                 commands = []
 
                 def factory(command, **kwargs):
@@ -439,12 +595,16 @@ class SchedulerSmokeTests(unittest.TestCase):
             self.assertEqual(len(commands), 2)
             self.assertIn("--resume", commands[0])
             self.assertNotIn("--resume", commands[1])
-            batch_root = results_root / "scheduler_test"
+            batch_root = launcher_runs_root / "scheduler_test"
             status = json.loads((batch_root / "batch_status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["counts"], {"succeeded": 2})
             self.assertTrue((batch_root / "launcher_logs" / "E01.log").is_file())
             self.assertTrue((batch_root / "batch_dashboard.svg").is_file())
-            self.assertTrue((models_root / "scheduler_test").is_dir())
+            self.assertTrue((models_root / f"e01_r9_ppo_{TIMESTAMP}").is_dir())
+            manifest = json.loads((batch_root / "batch_config.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["resume_checkpoints"]["E01"]["path"], str(source))
+            self.assertEqual(manifest["resume_checkpoints"]["E01"]["recorded_best_round"], 72)
+            self.assertRegex(manifest["resume_checkpoints"]["E01"]["sha256"], r"^[0-9a-f]{64}$")
 
     def test_zero_exit_without_required_outputs_is_a_batch_failure(self):
         with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:
@@ -455,8 +615,8 @@ class SchedulerSmokeTests(unittest.TestCase):
             args.batch_id = "missing_test"
             with mock.patch.object(multi, "RESULTS_ROOT", root / "results"), mock.patch.object(
                 multi, "MODELS_ROOT", root / "models"
-            ):
-                plans = multi.build_job_plans(("E02",), args.batch_id, None)
+            ), mock.patch.object(multi, "LAUNCHER_RUNS_ROOT", root / "launcher_runs"):
+                plans = multi.build_job_plans(("E02",), TIMESTAMP, None)
                 with mock.patch.object(multi.subprocess, "Popen", _ImmediateProcess), contextlib.redirect_stdout(
                     io.StringIO()
                 ):
@@ -464,7 +624,7 @@ class SchedulerSmokeTests(unittest.TestCase):
 
             self.assertEqual(return_code, 1)
             status = json.loads(
-                ((root / "results" / "missing_test" / "batch_status.json").read_text(encoding="utf-8"))
+                ((root / "launcher_runs" / "missing_test" / "batch_status.json").read_text(encoding="utf-8"))
             )
             self.assertEqual(status["jobs"]["E02"]["status"], "failed")
             self.assertIn("missing required outputs", status["jobs"]["E02"]["error"])
@@ -500,15 +660,15 @@ class SchedulerSmokeTests(unittest.TestCase):
 
             with mock.patch.object(multi, "RESULTS_ROOT", root / "results"), mock.patch.object(
                 multi, "MODELS_ROOT", root / "models"
-            ):
-                plans = multi.build_job_plans(("E02", "E03"), args.batch_id, None)
+            ), mock.patch.object(multi, "LAUNCHER_RUNS_ROOT", root / "launcher_runs"):
+                plans = multi.build_job_plans(("E02", "E03"), TIMESTAMP, None)
                 with mock.patch.object(multi.subprocess, "Popen", side_effect=factory), mock.patch.object(
                     multi, "_stop_containers"
                 ), contextlib.redirect_stdout(io.StringIO()):
                     return_code = multi.run_batch(args, plans, None)
 
             status = json.loads(
-                ((root / "results" / "failure_test" / "batch_status.json").read_text(encoding="utf-8"))
+                ((root / "launcher_runs" / "failure_test" / "batch_status.json").read_text(encoding="utf-8"))
             )
             self.assertEqual(return_code, 1)
             self.assertEqual(call_index, 2)
@@ -545,15 +705,15 @@ class SchedulerSmokeTests(unittest.TestCase):
 
             with mock.patch.object(multi, "RESULTS_ROOT", root / "results"), mock.patch.object(
                 multi, "MODELS_ROOT", root / "models"
-            ):
-                plans = multi.build_job_plans(("E02", "E03"), args.batch_id, None)
+            ), mock.patch.object(multi, "LAUNCHER_RUNS_ROOT", root / "launcher_runs"):
+                plans = multi.build_job_plans(("E02", "E03"), TIMESTAMP, None)
                 with mock.patch.object(multi.subprocess, "Popen", side_effect=factory), contextlib.redirect_stdout(
                     io.StringIO()
                 ):
                     return_code = multi.run_batch(args, plans, None)
 
             status = json.loads(
-                ((root / "results" / "popen_test" / "batch_status.json").read_text(encoding="utf-8"))
+                ((root / "launcher_runs" / "popen_test" / "batch_status.json").read_text(encoding="utf-8"))
             )
             self.assertEqual(return_code, 1)
             self.assertEqual(status["jobs"]["E02"]["return_code"], 127)
@@ -594,8 +754,8 @@ class SchedulerSmokeTests(unittest.TestCase):
 
             with mock.patch.object(multi, "RESULTS_ROOT", root / "results"), mock.patch.object(
                 multi, "MODELS_ROOT", root / "models"
-            ):
-                plans = multi.build_job_plans(("E02", "E03", "M01"), args.batch_id, None)
+            ), mock.patch.object(multi, "LAUNCHER_RUNS_ROOT", root / "launcher_runs"):
+                plans = multi.build_job_plans(("E02", "E03", "M01"), TIMESTAMP, None)
                 with mock.patch.object(multi.subprocess, "Popen", side_effect=factory), mock.patch.object(
                     multi.time, "sleep"
                 ), contextlib.redirect_stdout(io.StringIO()):
@@ -651,8 +811,8 @@ class SchedulerSmokeTests(unittest.TestCase):
 
             with mock.patch.object(multi, "RESULTS_ROOT", root / "results"), mock.patch.object(
                 multi, "MODELS_ROOT", root / "models"
-            ):
-                plans = multi.build_job_plans(("E02", "E03"), args.batch_id, None)
+            ), mock.patch.object(multi, "LAUNCHER_RUNS_ROOT", root / "launcher_runs"):
+                plans = multi.build_job_plans(("E02", "E03"), TIMESTAMP, None)
                 with mock.patch.object(multi.subprocess, "Popen", side_effect=factory), mock.patch.object(
                     multi, "_stop_containers", side_effect=fake_stop
                 ), mock.patch.object(multi.time, "sleep", side_effect=trigger_signal), contextlib.redirect_stdout(
@@ -662,7 +822,7 @@ class SchedulerSmokeTests(unittest.TestCase):
 
             self.assertEqual(return_code, 130)
             status = json.loads(
-                ((root / "results" / "signal_test" / "batch_status.json").read_text(encoding="utf-8"))
+                ((root / "launcher_runs" / "signal_test" / "batch_status.json").read_text(encoding="utf-8"))
             )
             self.assertTrue(status["interrupted"])
             self.assertEqual(status["jobs"]["E02"]["status"], "interrupted")

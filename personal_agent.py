@@ -202,6 +202,11 @@ class PersonalR9PPOAttackAgent(AttackMissileAgent):
 
     def reset(self):
         super().reset()
+        # Upstream AttackMissileAgent.reset() currently leaves the most recent
+        # isolated frame cached.  Without clearing it, the first decision of a
+        # new episode can consume the terminal observation from the preceding
+        # round.
+        self.latest_observation = None
         self.corrected_encoder.reset_history()
         self.action_counts.clear()
         self.action_switch_count = 0

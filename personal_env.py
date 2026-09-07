@@ -15,10 +15,6 @@ install_project_paths()
 from envengine import TrainingEnv  # noqa: E402
 from envengine.common import SimmerTriggerType  # noqa: E402
 from scenarios.cases import RewardPolicy, RewardTracker  # noqa: E402
-from scenarios.cases.reward import (  # noqa: E402
-    DESTROYED_TARGET_WEIGHT,
-    TIME_EFFICIENCY_WEIGHT,
-)
 
 
 RED_MISSILE_TYPES = (21000, 21001, 21002)
@@ -35,9 +31,10 @@ class R9RewardConfig:
     # Keep potential shaping policy-invariant for the trainer's discount.
     progress_discount: float = 0.999
     # Sparse damage shaping.  Across all objectives its theoretical maximum is
-    # the sum of official objective weights (13 in E01), not hundreds of points.
+    # the sum of official objective weights, not hundreds of points.
     damage_scale: float = 1.0
-    # A first destruction receives its exact 0--100 official-score increment.
+    # Every target-health change receives its exact 0--100 official-score
+    # increment under the current weighted-damage judge.
     official_score_scale: float = 100.0
     # No per-flight cost: otherwise dying early avoids future cost.  Direction
     # changes retain only a very small regularizer.
@@ -95,9 +92,9 @@ class PersonalR9TrainingEnv(TrainingEnv):
         # entity -> (target_id, reference_distance_km, previous_potential)
         self._progress_state: dict[int, tuple[int, float, float]] = {}
         self._relation_offsets: dict[int, int] = {}
-        self._seen_destroyed: set[int] = set()
         self._successful_sources: set[int] = set()
         self._settled_failures: set[int] = set()
+        self._previous_official_score = 0.0
         self._raw_official_score_delta = 0.0
         self._episode_reward_components: defaultdict[str, float] = defaultdict(float)
         self._episode_agent_returns: defaultdict[int, float] = defaultdict(float)
@@ -113,8 +110,22 @@ class PersonalR9TrainingEnv(TrainingEnv):
         # shared Commander is reset exactly once even on an unpatched checkout.
         self._red_destroy_causes.clear()
         observation = super().reset()
+        self._restore_simulator_clocks()
         self._reset_reward_state(observation)
         return observation
+
+    def _restore_simulator_clocks(self) -> None:
+        """Restore every simulator clock to the scenario's initial logic time.
+
+        The current upstream factory resets the engine clock but leaves each
+        simulator's private clock at zero.  Commands can be dispatched before
+        the first simulator update, so the per-simulator clocks must already
+        match the scenario clock when ``reset()`` returns.
+        """
+
+        initial_time = float(self.engine.profile.imagineProfile.simTime)
+        for simulator in self.engine.simulator_factory.get_all_simulators():
+            simulator.sim_time = initial_time
 
     def _install_destroy_event_capture(self) -> None:
         for simulator in self.engine.simulator_factory.get_all_simulators():
@@ -213,6 +224,7 @@ class PersonalR9TrainingEnv(TrainingEnv):
 
         observation = self._get_observation()
         self._reward_previous_observation = observation
+        self._anchor_official_score(observation)
         self._progress_state.clear()
         self._relation_offsets = {
             int(target_id): len(relations)
@@ -233,6 +245,7 @@ class PersonalR9TrainingEnv(TrainingEnv):
     def _reset_reward_state(self, observation: Mapping[str, Any]) -> None:
         self._reward_tracker = RewardTracker(self.reward_policy)
         self._reward_previous_observation = observation
+        self._anchor_official_score(observation)
         self._progress_state.clear()
         # Anchor the native hit-relation append-only lists at the new episode.
         # Current simulator versions clear them during Engine.reset(), but
@@ -242,7 +255,6 @@ class PersonalR9TrainingEnv(TrainingEnv):
             int(target_id): len(relations)
             for target_id, relations in self.engine.simulator_factory.target_hit_relation.items()
         }
-        self._seen_destroyed.clear()
         self._successful_sources.clear()
         self._settled_failures.clear()
         self._raw_official_score_delta = 0.0
@@ -294,7 +306,7 @@ class PersonalR9TrainingEnv(TrainingEnv):
             damage_sources,
             mission_completed=objectives_completed,
         )
-        self._credit_new_destructions(rewards, acting, current)
+        self._credit_official_score_delta(rewards, acting, current)
 
         if self.current_step >= self.max_steps and not objectives_completed:
             self._credit_timeout_losses(rewards, acting, current)
@@ -538,35 +550,42 @@ class PersonalR9TrainingEnv(TrainingEnv):
             }.get(int(entity_type), 0.0)
         )
 
-    def _credit_new_destructions(
+    def _anchor_official_score(self, observation: Mapping[str, Any]) -> None:
+        """Record the judge score at an episode boundary without rewarding it."""
+
+        assert self._reward_tracker is not None
+        self._reward_tracker.check_completion(self.current_step, observation)
+        self._previous_official_score = float(
+            self._reward_tracker.finish(observation).score
+        )
+
+    def _credit_official_score_delta(
         self,
         rewards: dict[int, float],
         acting: list[PersonalR9PPOAttackAgent],
         current: Mapping[str, Any],
     ) -> None:
+        """Broadcast the exact incremental score from the current pku judge.
+
+        The judge now scores weighted fractional health loss and has no time
+        term, so score changes occur on every damaging hit rather than only on
+        first destruction.  Computing the difference through RewardTracker
+        keeps this trainer synchronized with the read-only upstream formula.
+        """
+
         assert self._reward_tracker is not None
         self._reward_tracker.check_completion(self.current_step, current)
         breakdown = self._reward_tracker.finish(current)
-        weights = dict(breakdown.objective_weights)
-        new_ids = set(breakdown.destroyed_ids) - self._seen_destroyed
-        self._seen_destroyed.update(new_ids)
-        if not new_ids:
+        current_score = float(breakdown.score)
+        official_delta = current_score - self._previous_official_score
+        self._previous_official_score = current_score
+        if math.isclose(official_delta, 0.0, rel_tol=0.0, abs_tol=1e-12):
             return
-        remaining = max(0.0, 1.0 - self.current_step / self.max_steps)
-        total_weight = sum(float(value) for value in weights.values())
-        if total_weight <= 0.0:
-            return
-        team_bonus = sum(
-            self.reward_config.official_score_scale
-            * float(weights.get(int(entity_id), 1.0))
-            / total_weight
-            * (
-                DESTROYED_TARGET_WEIGHT
-                + TIME_EFFICIENCY_WEIGHT * remaining
-            )
-            for entity_id in new_ids
-        )
-        self._raw_official_score_delta += team_bonus
+        self._raw_official_score_delta += official_delta
+        # RewardTracker currently exposes a 0--100 score.  Keep the configured
+        # scale explicit so a deliberate training-only rescale remains possible
+        # without reimplementing the upstream weighting formula.
+        team_bonus = official_delta * self.reward_config.official_score_scale / 100.0
         if not acting:
             return
         # Keep per-transition reward scale independent of how many missiles
