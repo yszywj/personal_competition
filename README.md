@@ -1,5 +1,23 @@
 # R9 PPO 独立训练器
 
+## 与仿真器解耦的联合强化学习核心
+
+新增的 [`joint_rl_core`](JOINT_RL_CORE.md) 包含实体生命周期、条件混合动作
+掩码、全队共享传感资源、定长观测编码和原子轨迹校验。它不依赖旧 R9 目录、
+Torch、Gymnasium 或竞赛仿真器，可以单独验证接口与 PPO 数据语义。具体用途、
+集成边界和测试命令见链接文档。
+
+本机 Conda 环境位于 `personal_train/.conda/competition-rl`。使用下面的
+项目内激活脚本后，终端提示符显示为简短的 `(competition-rl)`：
+
+```bash
+source /home/amax/ry/competition/personal_train/activate_competition_rl.sh
+```
+
+该环境当前使用 Python 3.11、NumPy 2.4.6 和 PyTorch 2.11.0+cu126。
+依赖检查、联合核心测试和实际 RTX 4090 运算均已通过。完整仿真仍会因上游缺少
+Linux 版 `_CompCruiseMissileHPy.so` 而在导入时停止；这不是 Conda 依赖问题。
+
 ## 目录迁移状态（2026-09-07）
 
 当前目录已独立为 `/home/ry/competition/personal_train`，上游为平级的

@@ -1,5 +1,7 @@
 __pycache__/
 *.py[cod]
+/.cache/
+/.conda/
 /results/
 /models/
 /launcher_runs/
