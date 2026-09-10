@@ -69,7 +69,7 @@ class LifecycleAndMaskTests(unittest.TestCase):
             step=0,
         )
         self.assertEqual(mask.by_unit[0].activation.tolist(), [True, True])
-        self.assertEqual(mask.by_unit[0].movement.tolist(), [False, True, False])
+        self.assertEqual(mask.by_unit[0].movement.tolist(), [True, True, True])
         self.assertFalse(mask.shared_sensor_eligible.any())
 
         action = _joint_action(
@@ -78,6 +78,7 @@ class LifecycleAndMaskTests(unittest.TestCase):
                 activate=BinaryChoice.YES,
                 placement=(-0.25, 0.75),
                 objective_slot=2,
+                movement=Movement.POSITIVE,
             ),
             UnitAction.noop(1),
             UnitAction.noop(2),
@@ -89,6 +90,7 @@ class LifecycleAndMaskTests(unittest.TestCase):
                 "unit/0/activation",
                 "unit/0/placement",
                 "unit/0/objective",
+                "unit/0/movement",
                 "unit/1/activation",
                 "unit/2/activation",
             },
@@ -97,6 +99,7 @@ class LifecycleAndMaskTests(unittest.TestCase):
         intents = self.tracker.apply(action, self.objectives, step=0)
         self.assertEqual(len(intents.activations), 1)
         self.assertEqual(intents.activations[0].placement, (-0.25, 0.75))
+        self.assertEqual(intents.movements[0].movement, Movement.POSITIVE)
         self.assertEqual(self.tracker.states[0].phase, UnitPhase.PENDING)
 
         # A pending entity has no policy branches until execution is confirmed.
@@ -249,6 +252,86 @@ class LifecycleAndMaskTests(unittest.TestCase):
         )
         self.assertFalse(cooldown_mask.shared_sensor_eligible[0])
         self.assertTrue(ready_mask.shared_sensor_eligible[0])
+
+    def test_staged_sensor_request_requires_explicit_opt_in_and_accepts_receipt(self):
+        action = _joint_action(
+            UnitAction(slot=0, activate=BinaryChoice.YES, objective_slot=0),
+            UnitAction.noop(1),
+            UnitAction.noop(2),
+            sensor_slots=(0,),
+        )
+        default_mask = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            self.objectives,
+            self.tracker.sensor_state,
+            step=0,
+        )
+        self.assertEqual(default_mask.shared_sensor_eligible.tolist(), [False] * 3)
+        with self.assertRaises(ActionValidationError):
+            self.tracker.apply(action, self.objectives, step=0)
+
+        opted_in_mask = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            self.objectives,
+            self.tracker.sensor_state,
+            step=0,
+            allow_staged_sensor=True,
+        )
+        self.assertEqual(opted_in_mask.shared_sensor_eligible.tolist(), [True] * 3)
+        self.assertEqual(opted_in_mask.shared_sensor_max_requests, 1)
+
+        intents = self.tracker.apply(
+            action,
+            self.objectives,
+            step=0,
+            allow_staged_sensor=True,
+        )
+        self.assertEqual(tuple(item.slot for item in intents.activations), (0,))
+        self.assertEqual(
+            tuple(item.requester_slot for item in intents.shared_sensor),
+            (0,),
+        )
+        self.assertEqual(self.tracker.states[0].phase, UnitPhase.PENDING)
+        self.tracker.confirm_activations(
+            (ActivationReceipt(slot=0, request_step=0, accepted=True),),
+            step=0,
+        )
+        self.tracker.confirm_shared_sensor(
+            (
+                SharedSensorReceipt(
+                    requester_slot=0,
+                    request_step=0,
+                    accepted=True,
+                ),
+            ),
+            step=0,
+        )
+        self.assertEqual(self.tracker.states[0].phase, UnitPhase.ACTIVE)
+        self.assertEqual(self.tracker.sensor_state.remaining, 1)
+        self.assertEqual(self.tracker.sensor_state.pending, ())
+
+    def test_retarget_mask_excludes_the_current_objective(self):
+        activation = _joint_action(
+            UnitAction(slot=0, activate=BinaryChoice.YES, objective_slot=0),
+            UnitAction.noop(1),
+            UnitAction.noop(2),
+        )
+        self.tracker.apply(activation, self.objectives, step=0)
+        self.tracker.confirm_activations(
+            (ActivationReceipt(slot=0, request_step=0, accepted=True),),
+            step=0,
+        )
+        mask = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            self.objectives,
+            self.tracker.sensor_state,
+            step=1,
+        )
+        self.assertEqual(mask.by_unit[0].objective.tolist(), [False, False, True])
+        self.assertEqual(mask.by_unit[0].retarget.tolist(), [True, True])
 
     def test_invalid_objective_duplicate_requests_and_unconfirmed_control_fail(self):
         invalid_objective = _joint_action(
@@ -422,6 +505,8 @@ class ObservationTests(unittest.TestCase):
             velocity_xy=(5.0, -5.0),
             velocity_known=True,
             health_fraction=0.8,
+            target_progress_reference=0.4,
+            target_progress_fraction=-0.25,
         )
         objectives = (
             ObjectiveFrame(
@@ -433,6 +518,10 @@ class ObservationTests(unittest.TestCase):
                 velocity_known=True,
                 age_steps=5,
                 type_index=2,
+                assigned_total=0.25,
+                assigned_high=0.5,
+                assigned_medium=0.75,
+                assigned_low=1.0,
             ),
             ObjectiveFrame(slot=1, valid=True, known=False),
         )
@@ -452,12 +541,150 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(values["phase_staged"], 1.0)
         self.assertEqual(values["self_position_known"], 1.0)
         self.assertEqual(values["self_velocity_known"], 1.0)
+        self.assertAlmostEqual(values["target_progress_reference"], 0.4)
+        self.assertAlmostEqual(values["target_progress_fraction"], -0.25)
         self.assertEqual(values["objective_0_known"], 1.0)
         self.assertEqual(values["objective_0_velocity_known"], 1.0)
+        self.assertAlmostEqual(values["objective_0_assigned_total"], 0.25)
+        self.assertAlmostEqual(values["objective_0_assigned_high"], 0.5)
+        self.assertAlmostEqual(values["objective_0_assigned_medium"], 0.75)
+        self.assertAlmostEqual(values["objective_0_assigned_low"], 1.0)
         self.assertEqual(values["objective_1_valid"], 1.0)
         self.assertEqual(values["objective_1_known"], 0.0)
         self.assertEqual(values["objective_1_rel_x"], 0.0)
+        self.assertEqual(values["objective_2_assigned_total"], 0.0)
+        self.assertEqual(
+            sum(name.endswith("_assigned_total") for name in self.encoder.feature_names),
+            self.space.objective_count,
+        )
+
+        unavailable = self.encoder.encode(
+            unit,
+            self.tracker.states[0],
+            objectives,
+            self.tracker.sensor_state,
+            step=25,
+            sensor_ready_override=False,
+        )
+        unavailable_values = dict(
+            zip(self.encoder.feature_names, unavailable.tolist())
+        )
+        self.assertEqual(values["sensor_ready"], 1.0)
+        self.assertEqual(unavailable_values["sensor_ready"], 0.0)
+        self.assertEqual(unavailable.shape, encoded.shape)
         self.assertFalse(any("entity_id" in name for name in self.encoder.feature_names))
+
+    def test_detected_threat_count_normalizer_default_and_scenario_scales(self):
+        self.assertEqual(
+            self.encoder.config.detected_threat_count_normalizer,
+            32.0,
+        )
+
+        def encoded_count(*, normalizer: float, count: int) -> float:
+            encoder = JointObservationEncoder(
+                ObservationEncoderConfig(
+                    max_steps=100,
+                    space=self.space,
+                    bounds=MapBounds(-10.0, 10.0, -20.0, 20.0, 0.0, 100.0),
+                    max_speed=10.0,
+                    max_track_age_steps=20,
+                    unit_type_count=2,
+                    objective_type_count=3,
+                    detected_threat_count_normalizer=normalizer,
+                )
+            )
+            encoded = encoder.encode(
+                UnitFrame(
+                    slot=0,
+                    type_index=0,
+                    position=(0.0, 0.0, 0.0),
+                    detected_threat_count=count,
+                ),
+                self.tracker.states[0],
+                (),
+                self.tracker.sensor_state,
+                step=0,
+            )
+            values = dict(zip(encoder.feature_names, encoded.tolist()))
+            return values["detected_threat_count"]
+
+        self.assertAlmostEqual(encoded_count(normalizer=74.0, count=37), 0.5)
+        self.assertAlmostEqual(encoded_count(normalizer=148.0, count=37), 0.25)
+        self.assertAlmostEqual(encoded_count(normalizer=148.0, count=148), 1.0)
+
+    def test_detected_threat_count_normalizer_rejects_invalid_values(self):
+        common = dict(
+            max_steps=100,
+            space=self.space,
+            bounds=MapBounds(-10.0, 10.0, -20.0, 20.0, 0.0, 100.0),
+            max_speed=10.0,
+            max_track_age_steps=20,
+            unit_type_count=2,
+            objective_type_count=3,
+        )
+        for invalid in (0.0, -1.0, float("nan"), float("inf"), float("-inf")):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError,
+                "detected_threat_count_normalizer must be positive",
+            ):
+                ObservationEncoderConfig(
+                    **common,
+                    detected_threat_count_normalizer=invalid,
+                )
+
+    def test_objective_load_fractions_reject_non_finite_or_out_of_range_values(self):
+        for kwargs in (
+            {"assigned_total": -0.01},
+            {"assigned_high": 1.01},
+            {"assigned_medium": float("nan")},
+            {"assigned_low": float("inf")},
+            {"assigned_total": True},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                ValueError, "finite fraction"
+            ):
+                ObjectiveFrame(slot=0, valid=True, known=True, **kwargs)
+
+    def test_target_progress_features_reject_invalid_normalized_values(self):
+        for kwargs in (
+            {"target_progress_reference": -0.01},
+            {"target_progress_reference": 1.01},
+            {"target_progress_fraction": -1.01},
+            {"target_progress_fraction": float("nan")},
+            {"target_progress_reference": False},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                ValueError, "must be a finite value"
+            ):
+                UnitFrame(slot=0, type_index=0, position=(0.0, 0.0, 0.0), **kwargs)
+
+    def test_staged_unit_uses_map_centre_for_objective_geometry(self):
+        unit = UnitFrame(
+            slot=0,
+            type_index=0,
+            position=(999.0, 999.0, 0.0),
+            position_known=False,
+        )
+        objective = ObjectiveFrame(
+            slot=0,
+            valid=True,
+            known=True,
+            position=(10.0, 20.0),
+            type_index=1,
+        )
+        encoded = self.encoder.encode(
+            unit,
+            self.tracker.states[0],
+            (objective,),
+            self.tracker.sensor_state,
+            step=0,
+        )
+        values = dict(zip(self.encoder.feature_names, encoded.tolist()))
+        self.assertEqual(values["self_position_known"], 0.0)
+        self.assertEqual(values["objective_0_known"], 1.0)
+        self.assertAlmostEqual(values["objective_0_rel_x"], 0.5)
+        self.assertAlmostEqual(values["objective_0_rel_y"], 0.5)
+        self.assertEqual(values["objective_0_type_1"], 1.0)
 
     def test_non_finite_input_is_neutralized_and_shape_remains_stable(self):
         unit = UnitFrame(
@@ -529,6 +756,87 @@ class SlotRegistryTests(unittest.TestCase):
 
 
 class TrajectoryTests(unittest.TestCase):
+    @staticmethod
+    def _one_unit_transition(
+        space: JointSpaceSpec,
+        tracker: JointControlTracker,
+        observation: np.ndarray,
+    ) -> JointTransition:
+        action = _joint_action(UnitAction.noop(0))
+        mask = build_joint_action_mask(
+            space,
+            tracker.states,
+            (True,),
+            tracker.sensor_state,
+            step=0,
+        )
+        return JointTransition(
+            observations=(observation,),
+            states=tracker.states,
+            mask=mask,
+            action=action,
+            trace=JointPolicyTrace(
+                log_prob_by_term={"unit/0/activation": -0.2},
+                values_by_unit=(0.5,),
+                team_value=0.25,
+            ),
+            rewards=(1.0,),
+            team_reward=1.0,
+            next_observations=(observation + 1.0,),
+            terminated=(False,),
+            truncated=(False,),
+        )
+
+    def test_extend_copies_compatible_buffer_without_consuming_source(self):
+        space = JointSpaceSpec(unit_count=1, objective_count=1)
+        tracker = JointControlTracker(
+            space,
+            sensor_config=SharedSensorConfig(capacity=0),
+        )
+        source = JointTrajectoryBuffer(space, observation_dim=2)
+        source.append(
+            self._one_unit_transition(
+                space,
+                tracker,
+                np.asarray((1.0, 2.0), dtype=np.float32),
+            )
+        )
+        destination = JointTrajectoryBuffer(space, observation_dim=2)
+
+        destination.extend(source)
+
+        self.assertEqual(len(source), 1)
+        self.assertEqual(len(destination), 1)
+        self.assertIsNot(destination.items[0], source.items[0])
+        self.assertIsNot(
+            destination.items[0].observations[0],
+            source.items[0].observations[0],
+        )
+        self.assertIsNot(destination.items[0].mask, source.items[0].mask)
+        self.assertEqual(
+            destination.items[0].observations[0].tolist(),
+            source.items[0].observations[0].tolist(),
+        )
+        with self.assertRaises(ValueError):
+            destination.items[0].observations[0].setflags(write=True)
+
+    def test_extend_rejects_self_and_incompatible_buffers_without_mutation(self):
+        space = JointSpaceSpec(unit_count=1, objective_count=1)
+        destination = JointTrajectoryBuffer(space, observation_dim=2)
+
+        with self.assertRaisesRegex(ValueError, "extend itself"):
+            destination.extend(destination)
+        with self.assertRaisesRegex(ValueError, "observation dimensions"):
+            destination.extend(JointTrajectoryBuffer(space, observation_dim=3))
+        with self.assertRaisesRegex(ValueError, "joint spaces"):
+            destination.extend(
+                JointTrajectoryBuffer(
+                    JointSpaceSpec(unit_count=1, objective_count=2),
+                    observation_dim=2,
+                )
+            )
+        self.assertEqual(len(destination), 0)
+
     def test_buffer_requires_exact_conditional_terms_and_copies_arrays(self):
         space = JointSpaceSpec(unit_count=1, objective_count=1)
         tracker = JointControlTracker(

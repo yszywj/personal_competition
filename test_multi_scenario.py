@@ -79,6 +79,9 @@ class PlanTests(unittest.TestCase):
     def setUp(self):
         self.checkpoint = _checkpoint("E01")
 
+    def test_launcher_accepts_r9_satellite_contract_schema_v3(self):
+        self.assertEqual(multi.CURRENT_SCHEMA_VERSION, 3)
+
     def test_numeric_container_uid_does_not_require_a_passwd_entry(self):
         with mock.patch.object(multi.pwd, "getpwuid", side_effect=KeyError):
             self.assertEqual(multi._username_for_uid(1011), "uid1011")

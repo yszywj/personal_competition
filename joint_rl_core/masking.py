@@ -82,6 +82,7 @@ def build_joint_action_mask(
     sensor_state: SharedSensorState,
     *,
     step: int,
+    allow_staged_sensor: bool = False,
 ) -> JointActionMask:
     """Build masks from lifecycle state without inspecting simulator internals."""
 
@@ -102,17 +103,35 @@ def build_joint_action_mask(
     for state in states:
         staged = state.phase == UnitPhase.STAGED
         active = state.phase == UnitPhase.ACTIVE
+        selectable_objectives = objective.copy()
+        if (
+            active
+            and 0 <= state.current_objective_slot < space.objective_count
+        ):
+            # Changing to the current target is a command with no game effect.
+            selectable_objectives[state.current_objective_slot] = False
         activation = np.asarray((True, staged and bool(objective.any())), dtype=np.bool_)
-        retarget = np.asarray((True, active and bool(objective.any())), dtype=np.bool_)
-        movement = np.asarray((active, True, active), dtype=np.bool_)
+        retarget = np.asarray(
+            (True, active and bool(selectable_objectives.any())), dtype=np.bool_
+        )
+        # A placement and launch are submitted in one simulator transaction.
+        # The first movement command may therefore accompany activation.  When
+        # the parent activation choice is NO the movement branch is inactive
+        # and canonicalization still forces the stable NEUTRAL sentinel.
+        movement = np.asarray(
+            (staged or active, True, staged or active),
+            dtype=np.bool_,
+        )
         by_unit[state.slot] = UnitActionMask(
             activation=activation,
-            objective=objective.copy(),
+            objective=(selectable_objectives if active else objective.copy()),
             retarget=retarget,
             movement=movement,
             placement_possible=staged and bool(objective.any()),
         )
-        sensor_eligible[state.slot] = active and resource_ready
+        sensor_eligible[state.slot] = resource_ready and (
+            active or (allow_staged_sensor and staged)
+        )
 
     maximum = (
         min(
@@ -140,6 +159,7 @@ def branch_activity(state: UnitControlState, action: UnitAction) -> BranchActivi
             activation=True,
             placement=activates,
             objective=activates,
+            movement=activates,
         )
     if state.phase == UnitPhase.ACTIVE:
         retargets = action.retarget == BinaryChoice.YES
@@ -177,11 +197,17 @@ def validate_joint_action(
     action: JointAction,
     *,
     step: int,
+    allow_staged_sensor: bool = False,
 ) -> JointActionMask:
     """Validate categorical choices and only the continuous branches in use."""
 
     mask = build_joint_action_mask(
-        space, states, objective_valid, sensor_state, step=step
+        space,
+        states,
+        objective_valid,
+        sensor_state,
+        step=step,
+        allow_staged_sensor=allow_staged_sensor,
     )
     validate_action_against_mask(states, action, mask)
     return mask
@@ -265,6 +291,7 @@ def canonicalize_unit_action(
                 activate=BinaryChoice.YES,
                 placement=(float(action.placement[0]), float(action.placement[1])),
                 objective_slot=int(action.objective_slot),
+                movement=Movement(action.movement),
             )
         return UnitAction.noop(state.slot)
     if state.phase == UnitPhase.ACTIVE:

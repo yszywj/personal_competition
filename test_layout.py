@@ -33,6 +33,21 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(layout.core_root, core)
         self.assertEqual(layout.scenarios_root, repository / "scenarios")
 
+    def test_current_server_checkout_name_takes_precedence(self):
+        repository = self.root / "competition_envs"
+        core = self.make_source(repository)
+        self.make_source(self.root / "competition-platform-env")
+        layout = bootstrap.discover_project_layout(self.root / "personal_train")
+        self.assertEqual(layout.repository_root, repository)
+        self.assertEqual(layout.core_root, core)
+
+    def test_private_pku_snapshot_is_a_supported_fallback(self):
+        repository = self.root / "glibc-2.38" / "runtime" / "pku"
+        core = self.make_source(repository)
+        layout = bootstrap.discover_project_layout(self.root / "personal_train")
+        self.assertEqual(layout.repository_root, repository)
+        self.assertEqual(layout.core_root, core)
+
     def test_legacy_nested_checkout(self):
         core = self.make_source(self.root)
         layout = bootstrap.discover_project_layout(self.root / "personal_train")
@@ -129,6 +144,14 @@ class LayoutTests(unittest.TestCase):
         output = self.root / "result" / "new"
         self.assertEqual(bootstrap.validate_personal_output_path(output), output)
         self.assertFalse(output.exists())
+
+    def test_training_runtime_is_hidden_outside_result_directory(self):
+        result = bootstrap.PERSONAL_ROOT / "results" / "example-run"
+        runtime = bootstrap.training_runtime_path(result)
+        self.assertEqual(runtime.parent, bootstrap.TRAINING_RUNTIME_ROOT)
+        self.assertTrue(runtime.name.startswith("example-run-"))
+        self.assertNotIn(result, runtime.parents)
+        self.assertFalse(runtime.exists())
 
 
 class DeviceTests(unittest.TestCase):

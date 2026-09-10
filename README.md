@@ -1,24 +1,290 @@
-# R9 PPO 独立训练器
+# personal_train 强化学习训练
 
-## 与仿真器解耦的联合强化学习核心
+## 端到端联合 PPO（当前推荐）
 
-新增的 [`joint_rl_core`](JOINT_RL_CORE.md) 包含实体生命周期、条件混合动作
-掩码、全队共享传感资源、定长观测编码和原子轨迹校验。它不依赖旧 R9 目录、
-Torch、Gymnasium 或竞赛仿真器，可以单独验证接口与 PPO 数据语义。具体用途、
-集成边界和测试命令见链接文档。
+[`train_joint_ppo.py`](train_joint_ppo.py) 已把部署/发射、目标选择、发射后机动和
+卫星调度放进同一套可训练策略，不再调用 R9 高层规划。每枚红方导弹占一个稳定槽位：
 
-本机 Conda 环境位于 `personal_train/.conda/competition-rl`。使用下面的
-项目内激活脚本后，终端提示符显示为简短的 `(competition-rl)`：
+- 尚未发射时输出 `是否激活 + 部署 (x,y) + 目标槽位 + 首次机动`；部署、发射和
+  首次机动在同一个仿真 step 执行。
+- 发射后输出 `是否换目标 + 目标槽位 + 左/停/右机动`，部署与再次发射会被 mask。
+- 卫星不单独训练 Agent；同一网络使用一个团队指针头，从当前可用导弹中选择请求者
+  或 STOP。新版 `pku@32c08cd` 的卫星是 `SimulatorFactory` 管理的全队共享资源：
+  全队共用 100 次，卫星生效窗口内屏蔽重复请求。生效时卫星探测全部存活
+  24000 型拦截弹并向红方全队共享航迹，同时把 H 型对 9400/9600 的命中率提升到
+  100%。这个全局请求可以以 STAGED 或 ACTIVE 槽作 API requester，因此能与首步
+  部署/发射同步。适配器也保留对旧版
+  逐导弹后端的兼容。
+
+Actor 只接收红方受控导弹拥有的合法观测。各导弹的探测结果在红方团队内集中共享，
+隐藏目标只有被己方发现后才进入目标 mask；完整蓝方坐标和血量只用于官方计分，
+不会进入 Actor 或 Critic。每个目标槽还包含当前己方 `ACTIVE` 导弹的
+`total/H/M/L` 归一化分配负载；每个单位包含当前距离势函数的参考距离和进度比例。
+这些字段全部来自控制器历史和合法观测。目标血量仍不是策略输入。单位观测维度为
+`D = 40 + 19 * O`。目标槽数 `O` 默认至少为 18，并会按当前场景的全部计分目标
+自动扩展。因此 legacy/final24 的 `O=18` 对应 382 维；final20 的 easy、medium、
+hard 分别为 `O=24/36/48`，对应 `D=496/724/952`。
+
+策略的规划分支是自回归的：激活时先选目标，部署位置和首次机动再以该目标为
+条件；`ACTIVE` 单位选择换目标时，本步机动也以新目标为条件。网络分别使用
+plan、motion 和 sensor 三个 Critic，计算三组优势与 PPO 比率，报告中也分别
+记录 loss、entropy、KL、clip fraction 和决策数。
+
+三路奖励与该分支的时间尺度对应：
+
+- plan 在局末学习 `0.7 * 官方终局分 + 0.3 * 局部目标 credit`。原始局部
+  credit 按每个目标守恒分配；学习用副本为
+  `clip(eligible_unit_count * raw_local_credit, 0, 1)`，并与原始守恒值分开记录。
+  每个 unit-episode 的规划样本总权重相同。
+- motion 学习逐步官方分差加距离 PBRS，由 motion Critic 计算 GAE。
+- sensor 学习团队分差加后端匹配的信息 PBRS。新的全队卫星后端使用
+  合法可见的新鲜拦截弹航迹势差：按拦截弹 ID 去重，航迹随年龄线性衰减，
+  并以场景初始敌方拦截弹数归一化。旧的逐导弹后端仍使用已知计分目标势差。
+  两者默认势函上限均为 `0.015`，由 sensor Critic 计算 GAE。
+
+本机 Conda 环境位于 `personal_train/.conda/competition-rl`，私有 glibc 2.38
+启动器已经接好 Linux 原生导弹库。服务器不需要 Docker，也不要用 `torchrun`。
+当前训练源码以 `/home/amax/ry/competition/competition_envs` 的
+`pku@32c08cd` 为准；`bootstrap.py` 会优先发现这个平级目录，正式命令仍显式设置
+`COMPETITION_REPO_ROOT` 以便复现。`glibc-2.38/runtime/pku` 保留为旧后端快照，只用于
+复现和评估旧的 per-unit 卫星模型。
+
+checkpoint 策略 schema 仍为 `v3`。旧 `per_unit` 环境合同保留 v3，新
+`team_global` 环境合同为 v4，并写入全队容量 100、活动时间 3 分钟和有效
+每步最多 1 个请求，以及观测中拦截弹数量的场景归一化分母。合同还会绑定
+场景、单位/目标槽和观测维度。308 维 checkpoint、旧 per-unit backend 上产生的
+checkpoint，以及目标槽数不同的 final20 checkpoint 都不能直接用于新后端，
+需要从新随机初始化。
+下面命令在 tmux 中开始 E01 的 200 回合训练：
+
+```bash
+tmux new-session -d -s e01-joint-env32-200 \
+  "bash -lc 'source /home/amax/ry/competition/personal_train/activate_competition_rl.sh && \
+  export COMPETITION_REPO_ROOT=/home/amax/ry/competition/competition_envs && \
+  export CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 && \
+  cd /home/amax/ry/competition && \
+  exec /home/amax/ry/competition/glibc-2.38/python3.11-glibc238 \
+  personal_train/train_joint_ppo.py \
+  --scenario /home/amax/ry/competition/competition_envs/scenarios/cases/easy/E01/scenario.json \
+  --rounds 200 \
+  --device cuda:0 \
+  --learning-rate 1e-4 \
+  --learning-rate-final 1e-5 \
+  --learning-rate-decay-updates 50 \
+  --target-kl 0.01 \
+  --rollout-episodes 4 \
+  --minibatch-size 128 \
+  --sensor-capacity 100 \
+  --planning-team-weight 0.7 \
+  --planning-local-weight 0.3 \
+  --sensor-information-potential-scale 0.015 \
+  --run-id e01_joint_env32_200'"
+
+tmux attach -t e01-joint-env32-200
+```
+
+命令显式指向常规 `scenarios/cases/easy/E01`，避免与同名场景混淆。缩写
+`--scenario E01` 也会解析到这个场景。如果要训练
+`final24` 版 E01，必须显式传入
+`--scenario /home/amax/ry/competition/competition_envs/scenarios/cases/final24/easy/E01/scenario.json`；
+训练 final20 版 E01 则显式传入
+`--scenario /home/amax/ry/competition/competition_envs/scenarios/cases/final20/easy/E01/scenario.json`。
+不要为 final20 手工设置 `--objective-slots 18`；省略该参数时训练器会根据
+`RewardPolicy.objective_ids` 自动扩展。这些场景的实体数、目标数和观测宽度可能不同，
+checkpoint 不通用。
+
+`--rollout-episodes 4` 会用冻结的行为网络收集 4 个
+完整回合，再合并做一次 PPO 更新；最后不足 4 回合的批次也会更新。这样增加每次更新
+的有效样本量。200 回合正好产生 50 次更新，因此命令让学习率在本次运行内由
+`1e-4` 线性降到接近 `1e-5`；entropy 保留默认的慢衰减以维持稀疏奖励下的探索。
+KL 阈值和卫星团队额度也使用较保守设置。
+新架构尚未完成 200 回合或完整 horizon 的结果验证。启动前可先检查 GPU：
 
 ```bash
 source /home/amax/ry/competition/personal_train/activate_competition_rl.sh
+/home/amax/ry/competition/glibc-2.38/python3.11-glibc238 \
+  -c 'import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NO_CUDA")'
 ```
 
-该环境当前使用 Python 3.11、NumPy 2.4.6 和 PyTorch 2.11.0+cu126。
-依赖检查、联合核心测试和实际 RTX 4090 运算均已通过。完整仿真仍会因上游缺少
-Linux 版 `_CompCruiseMissileHPy.so` 而在导入时停止；这不是 Conda 依赖问题。
+先做短验证可显式缩短 horizon：
 
-## 目录迁移状态（2026-09-07）
+```bash
+export COMPETITION_REPO_ROOT=/home/amax/ry/competition/competition_envs
+/home/amax/ry/competition/glibc-2.38/python3.11-glibc238 \
+  personal_train/train_joint_ppo.py \
+  --scenario /home/amax/ry/competition/competition_envs/scenarios/cases/easy/E01/scenario.json \
+  --rounds 1 \
+  --debug-max-steps 20 \
+  --hidden-dim 64 \
+  --update-epochs 1 \
+  --minibatch-size 20 \
+  --device cuda:0 \
+  --run-id e01_joint_smoke
+```
+
+正常训练不传 `--debug-max-steps`，会使用 E01 的正式 1200 步有限时域。调试 horizon
+属于 truncation 并进行 value bootstrap；正式时限和自然结束属于 termination，
+bootstrap 为零。checkpoint 会绑定场景文件、实体槽、目标槽、观测 schema、horizon、
+探测共享、卫星和奖励配置，因此不能拿短验证 checkpoint 直接续接正式训练。
+
+需要区分两种 checkpoint 用法：
+
+- `--init-from best.pt` 只加载兼容的 v3 网络权重，重新创建优化器、计数器和随机数流，并采用本次
+  命令的 PPO、奖励和卫星团队额度。调整训练稳定性参数时应使用它。
+- `--resume latest.pt` 用于完整策略状态续跑，会恢复网络、优化器、调度器、计数器、
+  策略随机数状态以及原 PPO、游戏和 rollout 配置；命令中的新超参数不会替换
+  checkpoint 配置。
+
+续跑时 `--rounds` 表示本次再训练的轮数：
+
+```bash
+export COMPETITION_REPO_ROOT=/home/amax/ry/competition/competition_envs
+/home/amax/ry/competition/glibc-2.38/python3.11-glibc238 \
+  personal_train/train_joint_ppo.py \
+  --scenario E01 \
+  --rounds 100 \
+  --device cuda:0 \
+  --resume /home/amax/ry/competition/personal_train/models/<run>/latest.pt \
+  --run-id e01_joint_ppo_resume
+```
+
+只有当前 v3 版本写出的 `latest.pt` 和 `checkpoints/round_*.pt` 带有安全更新边界标记，
+可以传给 `--resume`。同一 v3 schema 的 `best.pt`、`interrupted.pt`、`failed.pt`
+及没有安全边界标记的 checkpoint 应传给 `--init-from`；任何 v1/v2 checkpoint 都会被拒绝。
+续跑会恢复记录的 seed、蓝方策略、rollout 大小和
+debug horizon；新进程中的蓝方独立随机流仍从该 seed 重新开始，因此它不是逐位一致的
+整个仿真进程重放。
+
+运行报告写入 `results/<run>/`，模型写入 `models/<run>/`。`rounds.csv/jsonl` 每回合
+记录得分、plan/motion/sensor return、raw/学习用局部 credit，以及激活、目标、
+部署、机动和卫星动作统计；`updates.csv/jsonl` 对 plan、motion、sensor 分别记录
+policy/value loss、entropy、KL、clip fraction、advantage 摘要和决策数。`best.pt`
+是产生最佳得分的更新前行为网络，
+`latest.pt` 和周期 checkpoint 是完成一个完整 rollout 更新后的状态。
+SIGINT/SIGTERM 在 PPO 更新期间会延迟到该更新、报告和安全 checkpoint 提交完成后处理，
+避免保存只有部分 minibatch 生效的网络。
+
+当前实现会在 rollout 收集时按分支批量采样所有单位动作，并在 PPO 更新前只做一次
+轨迹张量打包；每个 minibatch 的 mask、log-prob、entropy 和 value loss 都在设备上
+批量计算。完整 rollout 的观测、动作、mask、return 和 advantage 保留在 CPU，只把当前
+minibatch 搬到 GPU，因此显存峰值由 `minibatch_size` 而不是场景的完整 transition 数量
+决定。观测编码、同一步 action mask 和不可变轨迹快照也会复用。网络结构、v3
+checkpoint、rollout 大小和 PPO 超参数均未改变；随机采样仍来自相同的条件分布，但批量
+抽样改变了随机数的消费顺序，因此从旧实现的 checkpoint 续训不会逐位复现旧轨迹。
+
+## 多场景联合 PPO 独立并发
+
+[`train_joint_multi_scenario.py`](train_joint_multi_scenario.py) 是原生宿主机调度器，
+使用 `--suite legacy|final24|final20` 选择场景套件，默认是 legacy。省略
+`--scenarios` 时会分别创建 9/24/20 个相互隔离的
+`train_joint_ppo.py` 进程。每个场景拥有独立策略、optimizer、随机数流、私有 simulator
+runtime、结果、模型和 worker 日志；不同场景的经验不会混入同一策略梯度，因此不改变
+单场景 PPO 的训练定义。
+
+final20 可以先预览部分场景：
+
+```bash
+cd /home/amax/ry/competition
+export COMPETITION_REPO_ROOT=/home/amax/ry/competition/competition_envs
+
+/home/amax/ry/competition/glibc-2.38/python3.11-glibc238 \
+  personal_train/train_joint_multi_scenario.py \
+  --suite final20 \
+  --scenarios E01 M06 H08 \
+  --rounds 100 \
+  --gpu-ids 1,2,3 \
+  --max-parallel 3 \
+  --dry-run
+```
+
+它们会解析为 `final20/easy/E01`、`final20/medium/M06` 和
+`final20/hard/H08`。非 legacy 运行名包含 suite 前缀；续训会校验 suite、
+selector 和绝对场景路径。
+
+若 GPU0 正被单场景训练占用，最稳妥的预览方式是只列出七张空闲卡；九个任务
+全部进入队列，最多七个同时运行，任一结束后自动补入下一项：
+
+```bash
+cd /home/amax/ry/competition
+export COMPETITION_REPO_ROOT=/home/amax/ry/competition/competition_envs
+
+/home/amax/ry/competition/glibc-2.38/python3.11-glibc238 \
+  personal_train/train_joint_multi_scenario.py \
+  --rounds 100 \
+  --gpu-ids 1,2,3,4,5,6,7 \
+  --max-parallel 7 \
+  --rollout-episodes 4 \
+  --dry-run
+```
+
+确认 JSON 计划无误后删除 `--dry-run` 才会真正启动。`--dry-run` 不创建目录，也不启动
+子进程。为保证不影响当前 E01，需等它结束后再删除 `--dry-run`；即使避开 GPU0，正式
+worker 仍会竞争主机 CPU、内存带宽和 I/O。脚本要求显式给出 `--gpu-ids`；GPU0 默认
+受保护，重复 GPU 默认也会被拒绝。
+若必须在 GPU0 仍被占用时同时启动九个 worker，只能显式共享两张空闲卡：
+
+```bash
+export COMPETITION_REPO_ROOT=/home/amax/ry/competition/competition_envs
+/home/amax/ry/competition/glibc-2.38/python3.11-glibc238 \
+  personal_train/train_joint_multi_scenario.py \
+  --rounds 100 \
+  --gpu-ids 1,2,3,4,5,6,7,1,2 \
+  --allow-gpu-sharing \
+  --max-parallel 9 \
+  --dry-run
+```
+
+共享 GPU 能提高环境总并发，但通常会降低共享卡上每个 PPO 更新的速度；优先使用七并发
+队列模式。当前训练结束后可使用 `--gpu-ids 0,1,2,3,4,5,6,7`，并同时传入
+`--allow-gpu-zero --max-parallel 8`。可选的 `--numa-nodes`、`--cpu-sets` 和
+`--threads-per-worker` 按 device slot 绑定 CPU/内存；`--resume-batch` 会从上一批九个
+场景各自的 `latest.pt` 恢复，或用重复的 `--resume-from CASE=/path/latest.pt` 单独指定。
+调度状态和汇总写入 `launcher_runs/joint_multi_<timestamp>/`；发送退出信号时，调度器只
+通知本批次的独立进程组，并等待 trainer 在安全 PPO 更新边界保存后退出。
+
+使用 [`eval_joint_ppo.py`](eval_joint_ppo.py) 对同一组固定种子做严格的确定性评估：
+
+```bash
+source /home/amax/ry/competition/personal_train/activate_competition_rl.sh
+export COMPETITION_REPO_ROOT=/home/amax/ry/competition/competition_envs
+cd /home/amax/ry/competition
+
+/home/amax/ry/competition/glibc-2.38/python3.11-glibc238 \
+  personal_train/eval_joint_ppo.py \
+  --checkpoint /home/amax/ry/competition/personal_train/models/<run>/best.pt \
+  --scenario /home/amax/ry/competition/competition_envs/scenarios/cases/easy/E01/scenario.json \
+  --seeds 11 23 37 53 71 \
+  --episodes-per-seed 1 \
+  --deterministic \
+  --device cuda:0 \
+  --run-id e01_joint_v3_eval_det
+```
+
+采样评估使用同样的 checkpoint、场景和种子，将 `--deterministic` 换成
+`--stochastic`，并可增大 `--episodes-per-seed`。评估会严格比对场景和 checkpoint
+契约，在 `results/<eval-run>/` 写入 `per_episode.csv/jsonl`、`per_seed.csv`、
+`aggregate.json`、`evaluation_config.json`、`status.json` 和 `evaluation.log`。
+`aggregate.json` 包含 mean/std/median/quantile/lower-CVaR，用于比较不同 checkpoint。
+省略 `--seeds` 时使用固定的 `1..10`。
+
+仿真器要求工作目录中存在一组上游源码链接和原生 `Results` 临时文件。这些实现文件
+现在统一放在 Git 忽略的 `personal_train/.runtime/training_runs/`，不会再混入正式结果
+目录。`run_config.json` 中的 `runtime_dir` 可用于定位对应运行沙箱。
+
+历史目录 `results/joint_forced_hml_satellite_20260909_114546_104287` 是一次 3 step 的
+H/M/L 激活和旧 per-unit 卫星接口验证，并不是正式训练结果，也不能当作
+新 team-global 后端的验证证据。其中 23 个“代码文件”都是指向只读
+上游运行库的符号链接，624 个原生结果文件均为空。它已整体迁至
+`.runtime/validation/joint_forced_hml_satellite_20260909_114546_104287`；历史训练目录中
+同类 `runtime/` 也已迁出，映射记录在 `.runtime/runtime_migration_20260909.json`。
+当前 checkpoint 严格对应一个场景的实际实体槽数；要用一个 checkpoint 混训不同规模
+场景，还需要增加 `unit_present` padding/mask。
+
+联合核心的动作、状态和轨迹契约见 [JOINT_RL_CORE.md](JOINT_RL_CORE.md)，仿真适配
+与观测/奖励设计见 [JOINT_ADAPTER_DESIGN.md](JOINT_ADAPTER_DESIGN.md) 和
+[JOINT_TRAINING_DESIGN.md](JOINT_TRAINING_DESIGN.md)。
+
+## R9 + PPO 旧架构与迁移记录（保留）
 
 当前目录已独立为 `/home/ry/competition/personal_train`，上游为平级的
 `competition-platform-env`。通用路径、只读挂载、设备依赖及容器基础环境已适配，
@@ -72,6 +338,9 @@ python3 train_r9_multi_scenario.py \
 7. 编码下一状态时重新传入当前目标槽索引。
 8. 原项目的目标融合器会丢弃新发现的 9500；本目录的 `PersonalR9Commander` 只从红方隔离观测的合法 `detectInfo` 动态加入 9500，并在下一回合清空这些动态航迹。
 9. 在统一隔离观测快照到达后先完成一次原 R9 重规划，并冻结本 step 的发射比例上下文，避免 Agent 的 Python 遍历顺序改变同一步观测，也保证 PPO 保存的下一状态目标与下一次 Actor 使用的一致。
+10. 新版全队卫星后端由 Commander 每步仲裁：活动窗口内不重复申请，同一步多个
+    H leader 只提交一次请求；90 维观测中原有的卫星位改为团队窗口状态。缺少新版
+    顶层字段的旧环境继续使用逐弹行为。
 
 观测修复只改变原 90 个槽位中错误值的生成方式，没有增加观测、改变槽位顺序或扩展动作。Commander 扩展也仍调用原 R9 的分配算法，只把合法探测到的 9500 加入其目标目录，并把原先发生在首个 Agent 查询时的同一步规划提前到统一观测阶段。
 
@@ -103,7 +372,7 @@ python3 train_r9_multi_scenario.py \
 
 当前没有为“消耗一枚蓝方拦截弹”设置直接正奖励：L 弹作为诱饵是通过更低的损失代价隐式表达的。这样可以避免 PPO 学成集体送死；如后续实验证明确实需要显式诱饵奖励，应再基于拦截关系以远小于目标毁伤的尺度加入。
 
-## Docker GPU 训练
+## Docker GPU 训练（历史说明，当前服务器禁止使用）
 
 推荐使用 GPU 镜像内自带的 `/app` 核心代码，只挂载本目录（可写）和九个场景（只读）。原生导弹库必须在容器内写 `./Results/...` 临时文件，因此不要把整个 `/app` 或源码中的 `core` 只读覆盖；这些原生临时文件会随 `--rm` 删除，宿主机仍只有 `personal_train` 会被写入：
 
@@ -182,9 +451,9 @@ docker run --rm -it \
 90/3 时会拒绝加载。实际采用的 `resume_mode` 和 `policy_rng_restored` 会写入
 `run_config.json`。
 
-checkpoint 内部仍保留格式版本标记，用于防止把旧的一步 TD checkpoint 错当成
-可完整续训的模型；这个内部兼容字段不会出现在新结果目录名中。旧的一步 TD
-checkpoint 默认拒绝；显式加入 `--allow-legacy-resume` 时只把兼容的网络权重
+checkpoint 内部格式现为 v3，并绑定新版卫星仲裁与观测语义，防止把旧环境下的
+checkpoint 错当成可完整续训的模型；这个内部兼容字段不会出现在新结果目录名中。
+v1/v2 checkpoint 默认拒绝；显式加入 `--allow-legacy-resume` 时只把兼容的网络权重
 作为初始化，不恢复旧 Adam 状态、旧计数器或旧超参数。续训会新建一套结果曲线
 并从 round 1 编号。
 
@@ -336,6 +605,7 @@ docker run --rm --network none \
 ## 有意保留的竞赛边界
 
 - `target_slots=5` 未扩展；这是赛事方尚未回答的接口边界。
+- 因此 R9 只保留给旧九场景；final20 的 24/36/48 个目标应使用本页开头的联合 PPO。
 - 9500 无人船必须先由合法探测发现；本训练器不会从 `case_info` 提前读取其坐标。发现后 Commander 可以分配 L 弹，但因为 `target_slots=5` 不扩展，Actor 对该船没有独立详细槽位，只能使用 R9 的“船目标”任务上下文和其余合法自身/探测特征。
 - 本训练器不启动后台规划进程。
 - 修复后的 checkpoint 应继续通过本目录的 Agent/Encoder 进行评估。直接改回原 `main.py` 会恢复原来错误的特征生成和状态传递逻辑。

@@ -33,6 +33,7 @@ from personal_train.bootstrap import (  # noqa: E402
     REPOSITORY_ROOT,
     install_project_paths,
     prepare_runtime_directory,
+    training_runtime_path,
     validate_personal_output_path,
 )
 
@@ -72,7 +73,7 @@ ACTION_DIM = 3
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 CHECKPOINT_SCHEMA = {
     "name": "personal-r9-ppo",
-    "version": 2,
+    "version": 3,
     "algorithm": "personal_ppo_gae_v2",
     "reward": "official_score_delta_v2",
     "observation_dim": OBSERVATION_DIM,
@@ -80,6 +81,11 @@ CHECKPOINT_SCHEMA = {
     "target_slots": 5,
     "agent_id_scheme": "red-contiguous-1-based",
     "commander": "r9-with-detected-9500",
+    "satellite_semantics": {
+        "backend_detection": "isolated-observation-top-level-is_using_satellite",
+        "feature": "team-global-active-or-legacy-per-unit-self-used",
+        "global_request": "one-leader-claim-per-team-step-while-inactive",
+    },
 }
 
 
@@ -534,8 +540,8 @@ def _policy_config(
                 "--allow-legacy-resume for a weights-only initialization."
             )
         LOGGER.warning(
-            "Loading legacy checkpoint weights only; optimizer/counters and old "
-            "one-step-TD hyperparameters will not be restored: %s",
+            "Loading legacy/incompatible checkpoint weights only; optimizer, "
+            "counters, hyperparameters, and satellite semantics will not be restored: %s",
             resume_path,
         )
     merged = asdict(fresh)
@@ -717,7 +723,7 @@ def main(argv: list[str] | None = None) -> int:
         # No copy of the upstream Python code is patched in this runtime tree.
         native_results = os.environ.get("PERSONAL_NATIVE_RESULTS")
         runtime_dir = prepare_runtime_directory(
-            result_dir / "runtime",
+            training_runtime_path(result_dir),
             native_results=Path(native_results) if native_results else None,
         )
         os.chdir(runtime_dir)
@@ -796,6 +802,7 @@ def main(argv: list[str] | None = None) -> int:
             "reward": reward_config.to_dict(),
             "result_dir": str(result_dir),
             "model_dir": str(model_dir),
+            "runtime_dir": str(runtime_dir),
             "externally_managed_output": args.result_dir is not None,
             "resume": str(resume_path) if resume_path else None,
             "resume_mode": resume_mode,

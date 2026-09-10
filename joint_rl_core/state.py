@@ -243,6 +243,7 @@ class JointControlTracker:
         objective_valid: Sequence[bool],
         *,
         step: int,
+        allow_staged_sensor: bool = False,
     ) -> ResolvedIntents:
         """Validate one action, update history, and emit neutral intents."""
 
@@ -261,6 +262,7 @@ class JointControlTracker:
             self._sensor,
             action,
             step=step,
+            allow_staged_sensor=allow_staged_sensor,
         )
         canonical = canonicalize_joint_action(self._states, action)
         by_slot = {item.slot: item for item in canonical.units}
@@ -280,12 +282,14 @@ class JointControlTracker:
                         request_step=step,
                     )
                 )
+                movements.append(MovementIntent(state.slot, unit_action.movement))
                 updated.append(
                     replace(
                         state,
                         phase=UnitPhase.PENDING,
                         activation_requested_step=step,
                         pending_objective_slot=unit_action.objective_slot,
+                        last_movement=unit_action.movement,
                     )
                 )
             elif state.phase == UnitPhase.ACTIVE:

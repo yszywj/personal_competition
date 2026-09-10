@@ -280,6 +280,40 @@ class AgentTransitionTests(unittest.TestCase):
         self.assertAlmostEqual(float(transition.next_observation[11]), 1.0)
         self.assertAlmostEqual(float(transition.next_observation[30]), 1.0)
 
+    def test_satellite_feature_uses_global_active_flag_with_legacy_fallback(self):
+        policy = _DummyPolicy()
+        agent = PersonalR9PPOAttackAgent(
+            1,
+            2,
+            _initial_targets(),
+            _DummyCommander(),
+            policy,
+            learning_max_steps=100,
+            team_size=164,
+            initial_sim_time_ms=INITIAL_TIME,
+            sim_step_ms=1000,
+        )
+        agent.launch_step = 0
+        agent.sat_used = True
+
+        current = _observation(1, (6_371_000.0, 0.0, 0.0))
+        current["is_using_satellite"] = False
+        actions = []
+        agent._set_acc_z_learning(actions, current)
+        encoded, _, _ = agent._learning_transition
+        self.assertEqual(encoded.shape, (90,))
+        # A prior request by this missile must not masquerade as an active
+        # team-global satellite window.
+        self.assertEqual(float(encoded[10]), 0.0)
+
+        following = _observation(2, (6_371_000.0, 100.0, 0.0))
+        following["is_using_satellite"] = True
+        agent.record_step(following, None, 0.0, {"done": False})
+        self.assertEqual(float(policy.transitions[0].next_observation[10]), 1.0)
+
+        legacy = _observation(3, (6_371_000.0, 200.0, 0.0))
+        self.assertTrue(agent._satellite_used_feature(legacy))
+
 
 class ResetTests(unittest.TestCase):
     def test_personal_environment_restores_every_simulator_clock(self):
@@ -616,6 +650,77 @@ class DynamicShipDiscoveryTests(unittest.TestCase):
 
         commander.reset()
         self.assertEqual([target.entity_id for target in commander.targets], [51])
+
+
+class SatelliteCompatibilityTests(unittest.TestCase):
+    @staticmethod
+    def _missile_observation(entity_id: int, step: int, active=None):
+        observation = _observation(step, (6_371_000.0, float(entity_id), 0.0))
+        observation["entity_id"] = entity_id
+        observation["agent_id"] = entity_id
+        if active is not None:
+            observation["is_using_satellite"] = bool(active)
+        return observation
+
+    def test_global_backend_blocks_active_window_and_claims_once_per_step(self):
+        commander = PersonalR9Commander((), seed=1)
+        commander.policy.satellite_platform_ids = frozenset({2, 3})
+
+        commander.begin_step(
+            (
+                self._missile_observation(2, 7, False),
+                self._missile_observation(3, 7, False),
+            )
+        )
+        self.assertTrue(commander.global_satellite_backend)
+        self.assertFalse(commander.global_satellite_active)
+        self.assertTrue(commander.should_use_satellite(2))
+        self.assertFalse(commander.should_use_satellite(3))
+        # Re-entering begin_step for the same simulator step cannot reopen the
+        # team-global claim.
+        commander.begin_step(
+            (
+                self._missile_observation(2, 7, False),
+                self._missile_observation(3, 7, False),
+            )
+        )
+        self.assertFalse(commander.should_use_satellite(3))
+
+        commander.begin_step(
+            (
+                self._missile_observation(2, 8, True),
+                self._missile_observation(3, 8, True),
+            )
+        )
+        self.assertTrue(commander.global_satellite_active)
+        self.assertFalse(commander.should_use_satellite(2))
+        self.assertFalse(commander.should_use_satellite(3))
+
+        commander.begin_step(
+            (
+                self._missile_observation(2, 9, False),
+                self._missile_observation(3, 9, False),
+            )
+        )
+        self.assertTrue(commander.should_use_satellite(3))
+
+    def test_legacy_backend_preserves_independent_leader_requests(self):
+        commander = PersonalR9Commander((), seed=1)
+        commander.policy.satellite_platform_ids = frozenset({2, 3})
+        commander.begin_step(
+            (
+                self._missile_observation(2, 7),
+                self._missile_observation(3, 7),
+            )
+        )
+
+        self.assertFalse(commander.global_satellite_backend)
+        self.assertTrue(commander.should_use_satellite(2))
+        self.assertTrue(commander.should_use_satellite(3))
+
+        commander.reset()
+        self.assertFalse(commander.global_satellite_backend)
+        self.assertFalse(commander.global_satellite_active)
 
 
 class LocalPPOTests(unittest.TestCase):
@@ -1000,6 +1105,46 @@ class CheckpointTests(unittest.TestCase):
             args = parse_args(["--resume", str(path), "--device", "cpu"])
             with self.assertRaises(ValueError):
                 _policy_config(args, path)
+
+    def test_v2_checkpoint_requires_explicit_legacy_weights_initialization(self):
+        with tempfile.TemporaryDirectory(dir=PERSONAL_ROOT) as directory:
+            path = Path(directory) / "v2.pt"
+            policy = PPOSharedPolicy(
+                PPOConfig(
+                    observation_dim=90,
+                    action_dim=3,
+                    hidden_dim=8,
+                    rollout_size=8,
+                    minibatch_size=4,
+                    update_epochs=1,
+                    device="cpu",
+                )
+            )
+            _save_policy(policy, path)
+            checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+            v2_schema = dict(CHECKPOINT_SCHEMA)
+            v2_schema["version"] = 2
+            v2_schema.pop("satellite_semantics")
+            checkpoint["personal_train_schema"] = v2_schema
+            torch.save(checkpoint, path)
+
+            strict_args = parse_args(["--resume", str(path), "--device", "cpu"])
+            with self.assertRaises(ValueError):
+                _policy_config(strict_args, path)
+
+            legacy_args = parse_args(
+                [
+                    "--resume",
+                    str(path),
+                    "--allow-legacy-resume",
+                    "--device",
+                    "cpu",
+                ]
+            )
+            restored_config = _policy_config(legacy_args, path)
+            self.assertEqual(restored_config.observation_dim, 90)
+            self.assertEqual(restored_config.action_dim, 3)
+            self.assertEqual(_resume_mode(path), "legacy_weights_only")
 
 
 if __name__ == "__main__":

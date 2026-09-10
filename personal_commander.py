@@ -94,6 +94,13 @@ class PersonalR9Commander(RedBaselineCommander):
         )
         self.track_fusion = DynamicDetectedTargetTrackFusion(self.initial_targets)
         self._step_launch_fraction = 0.0
+        # Newer environments expose the team-global satellite window on every
+        # isolated observation.  Keep detection observation-driven so the same
+        # Commander remains compatible with older per-missile environments.
+        self._global_satellite_backend = False
+        self._global_satellite_active = False
+        self._satellite_observation_step: int | None = None
+        self._global_satellite_claim_step: int | None = None
 
     def begin_step(self, observations: tuple[dict, ...]) -> None:
         """Plan once from the joint legal snapshot before querying any Agent.
@@ -104,6 +111,19 @@ class PersonalR9Commander(RedBaselineCommander):
         prevents Python Agent iteration order from changing feature 90.
         """
 
+        if observations:
+            self._satellite_observation_step = int(observations[0].get("step", 0))
+            global_reports = tuple(
+                bool(observation["is_using_satellite"])
+                for observation in observations
+                if "is_using_satellite" in observation
+            )
+            if global_reports:
+                self._global_satellite_backend = True
+                # The field is team-global and should agree across live agents;
+                # ``any`` remains conservative if an upstream frame is mixed.
+                self._global_satellite_active = any(global_reports)
+
         super().begin_step(observations)
         if observations:
             step = int(observations[0].get("step", 0))
@@ -112,6 +132,30 @@ class PersonalR9Commander(RedBaselineCommander):
         self._step_launch_fraction = len(self.launched_ids) / max(
             1, len(self.expected_platform_ids)
         )
+
+    @property
+    def global_satellite_backend(self) -> bool:
+        return self._global_satellite_backend
+
+    @property
+    def global_satellite_active(self) -> bool:
+        return self._global_satellite_active
+
+    def should_use_satellite(self, platform_id: int) -> bool:
+        """Arbitrate R9 satellite leaders under either environment contract."""
+
+        if not super().should_use_satellite(platform_id):
+            return False
+        if not self._global_satellite_backend:
+            # Old environments account satellite usage independently for each
+            # missile, so preserve the original R9 leader behavior exactly.
+            return True
+        if self._global_satellite_active:
+            return False
+        if self._global_satellite_claim_step == self._satellite_observation_step:
+            return False
+        self._global_satellite_claim_step = self._satellite_observation_step
+        return True
 
     def learning_task_context(
         self, platform_id: int
@@ -125,3 +169,7 @@ class PersonalR9Commander(RedBaselineCommander):
         self.targets = self.initial_targets
         self.track_fusion = DynamicDetectedTargetTrackFusion(self.initial_targets)
         self._step_launch_fraction = 0.0
+        self._global_satellite_backend = False
+        self._global_satellite_active = False
+        self._satellite_observation_step = None
+        self._global_satellite_claim_step = None

@@ -108,6 +108,16 @@ class PersonalR9PPOAttackAgent(AttackMissileAgent):
     def _task_context(self):
         return self.commander.learning_task_context(self.entity_id)
 
+    def _satellite_used_feature(self, observation: dict) -> bool:
+        """Return the satellite state defined by the detected backend contract."""
+
+        if "is_using_satellite" in observation:
+            # In the new backend this is a shared active-window state, rather
+            # than a record of whether this particular missile requested it.
+            return bool(observation["is_using_satellite"])
+        # Old isolated observations have no team-global field.
+        return bool(self.sat_used)
+
     def _set_acc_z_learning(self, actions: list[list[float]], observation: dict) -> None:
         if self.launch_step < 0:
             self.switched_on_last_action = False
@@ -115,15 +125,16 @@ class PersonalR9PPOAttackAgent(AttackMissileAgent):
         assert self.learning_policy is not None
         assert self.learning_adapter is not None
 
+        satellite_used = self._satellite_used_feature(observation)
         action_mask = self.learning_adapter.build_action_mask(
             launched=True,
-            satellite_used=self.sat_used,
+            satellite_used=satellite_used,
         )
         encoded = self.corrected_encoder.encode(
             observation,
             launched=True,
             launch_step=self.launch_step,
-            satellite_used=self.sat_used,
+            satellite_used=satellite_used,
             # s_t contains the command that governed the flight into s_t.
             maneuver_state=self.set_acc_z_z,
             current_target_index=self._target_index(),
@@ -176,7 +187,7 @@ class PersonalR9PPOAttackAgent(AttackMissileAgent):
                 observation,
                 launched=True,
                 launch_step=self.launch_step,
-                satellite_used=self.sat_used,
+                satellite_used=self._satellite_used_feature(observation),
                 maneuver_state=self.set_acc_z_z,
                 # Fix: s' uses the same current target slot as s.
                 current_target_index=self._target_index(),

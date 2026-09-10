@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -56,6 +56,33 @@ class UnitFrame:
     velocity_known: bool = False
     health_fraction: float = 1.0
     visible: bool = True
+    detected_threat_count: int = 0
+    nearest_threat_known: bool = False
+    nearest_threat_position: tuple[float, float] = (0.0, 0.0)
+    nearest_threat_velocity_xy: tuple[float, float] = (0.0, 0.0)
+    nearest_threat_velocity_known: bool = False
+    nearest_threat_age_steps: int = 0
+    target_progress_reference: float = 0.0
+    target_progress_fraction: float = 0.0
+
+    def __post_init__(self) -> None:
+        ranges = {
+            "target_progress_reference": (0.0, 1.0),
+            "target_progress_fraction": (-1.0, 1.0),
+        }
+        for name, (low, high) in ranges.items():
+            raw_value = getattr(self, name)
+            if isinstance(raw_value, bool):
+                raise ValueError(f"{name} must be a finite value in [{low}, {high}]")
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"{name} must be a finite value in [{low}, {high}]"
+                ) from error
+            if not math.isfinite(value) or not low <= value <= high:
+                raise ValueError(f"{name} must be a finite value in [{low}, {high}]")
+            object.__setattr__(self, name, value)
 
 
 @dataclass(frozen=True)
@@ -68,6 +95,33 @@ class ObjectiveFrame:
     velocity_known: bool = False
     age_steps: int = 0
     type_index: int | None = None
+    assigned_total: float = 0.0
+    assigned_high: float = 0.0
+    assigned_medium: float = 0.0
+    assigned_low: float = 0.0
+
+    def __post_init__(self) -> None:
+        # These values are controller-owned load fractions.  Keeping their
+        # contract here prevents a bad denominator or an accidental raw count
+        # from silently changing the observation scale.
+        for name in (
+            "assigned_total",
+            "assigned_high",
+            "assigned_medium",
+            "assigned_low",
+        ):
+            raw_value = getattr(self, name)
+            if isinstance(raw_value, bool):
+                raise ValueError(f"{name} must be a finite fraction in [0, 1]")
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"{name} must be a finite fraction in [0, 1]"
+                ) from error
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be a finite fraction in [0, 1]")
+            object.__setattr__(self, name, value)
 
 
 @dataclass(frozen=True)
@@ -79,6 +133,7 @@ class ObservationEncoderConfig:
     max_track_age_steps: int
     unit_type_count: int
     objective_type_count: int
+    detected_threat_count_normalizer: float = 32.0
 
     def __post_init__(self) -> None:
         for name in (
@@ -92,24 +147,27 @@ class ObservationEncoderConfig:
                 raise ValueError(f"{name} must be positive")
         if not math.isfinite(float(self.max_speed)) or self.max_speed <= 0.0:
             raise ValueError("max_speed must be positive")
+        if (
+            not math.isfinite(float(self.detected_threat_count_normalizer))
+            or self.detected_threat_count_normalizer <= 0.0
+        ):
+            raise ValueError("detected_threat_count_normalizer must be positive")
 
 
 def _clip(value: float, low: float, high: float) -> float:
-    if not math.isfinite(float(value)):
+    numeric = float(value)
+    if not math.isfinite(numeric):
         return 0.0
-    return float(np.clip(value, low, high))
+    if numeric < low:
+        return float(low)
+    if numeric > high:
+        return float(high)
+    return numeric
 
 
 def _finite(value: float) -> float:
     value = float(value)
     return value if math.isfinite(value) else 0.0
-
-
-def _one_hot(index: int | None, size: int) -> list[float]:
-    values = [0.0] * size
-    if index is not None and 0 <= int(index) < size:
-        values[int(index)] = 1.0
-    return values
 
 
 class JointObservationEncoder:
@@ -125,13 +183,37 @@ class JointObservationEncoder:
 
     def __init__(self, config: ObservationEncoderConfig) -> None:
         self.config = config
+        # The encoder is called once per controlled unit and simulator step.
+        # These values depend only on the frozen configuration, so constructing
+        # them in the hot path needlessly dominates small scalar encodes.
+        self._feature_names = self._build_feature_names()
+        bounds = config.bounds
+        self._x_span = float(bounds.x_max - bounds.x_min)
+        self._y_span = float(bounds.y_max - bounds.y_min)
+        self._altitude_span = float(bounds.altitude_max - bounds.altitude_min)
+        self._map_diagonal = math.hypot(self._x_span, self._y_span)
+        self._map_center_x = 0.5 * float(bounds.x_min + bounds.x_max)
+        self._map_center_y = 0.5 * float(bounds.y_min + bounds.y_max)
+        self._empty_objective_features = (0.0,) * (
+            15 + config.objective_type_count
+        )
+        self._unit_type_vectors = self._one_hot_vectors(config.unit_type_count)
+        self._objective_type_vectors = self._one_hot_vectors(
+            config.objective_type_count
+        )
+        self._current_objective_vectors = self._one_hot_vectors(
+            config.space.objective_count + 1
+        )
 
     @property
     def dimension(self) -> int:
-        return len(self.feature_names)
+        return len(self._feature_names)
 
     @property
     def feature_names(self) -> tuple[str, ...]:
+        return self._feature_names
+
+    def _build_feature_names(self) -> tuple[str, ...]:
         config = self.config
         names = list(self.GLOBAL_FEATURES)
         names.extend(f"phase_{phase.name.lower()}" for phase in UnitPhase)
@@ -146,9 +228,33 @@ class JointObservationEncoder:
                 "self_vy",
             )
         )
-        names.extend(("health", "visible", "activation_age", "objective_change_age"))
+        names.extend(
+            (
+                "health",
+                "visible",
+                "activation_age",
+                "objective_change_age",
+                "target_progress_reference",
+                "target_progress_fraction",
+            )
+        )
         names.extend(f"last_movement_{movement.name.lower()}" for movement in Movement)
         names.extend(f"unit_type_{index}" for index in range(config.unit_type_count))
+        names.extend(
+            (
+                "detected_threat_count",
+                "nearest_threat_known",
+                "nearest_threat_rel_x",
+                "nearest_threat_rel_y",
+                "nearest_threat_distance",
+                "nearest_threat_bearing_sin",
+                "nearest_threat_bearing_cos",
+                "nearest_threat_velocity_known",
+                "nearest_threat_vx",
+                "nearest_threat_vy",
+                "nearest_threat_age",
+            )
+        )
         names.append("current_objective_none")
         names.extend(
             f"current_objective_{index}"
@@ -175,40 +281,60 @@ class JointObservationEncoder:
                 f"{prefix}_type_{index}"
                 for index in range(config.objective_type_count)
             )
+            names.extend(
+                (
+                    f"{prefix}_assigned_total",
+                    f"{prefix}_assigned_high",
+                    f"{prefix}_assigned_medium",
+                    f"{prefix}_assigned_low",
+                )
+            )
         return tuple(names)
 
-    def encode(
+    @staticmethod
+    def _one_hot_vectors(size: int) -> tuple[tuple[float, ...], ...]:
+        zero = (0.0,) * size
+        vectors = [zero]
+        for index in range(size):
+            values = [0.0] * size
+            values[index] = 1.0
+            vectors.append(tuple(values))
+        return tuple(vectors)
+
+    @staticmethod
+    def _cached_one_hot(
+        index: int | None,
+        vectors: tuple[tuple[float, ...], ...],
+    ) -> tuple[float, ...]:
+        if index is None:
+            return vectors[0]
+        numeric = int(index)
+        if numeric < 0 or numeric >= len(vectors) - 1:
+            return vectors[0]
+        return vectors[numeric + 1]
+
+    def _index_objectives(
         self,
-        unit: UnitFrame,
-        control: UnitControlState,
         objectives: Sequence[ObjectiveFrame],
-        sensor_state: SharedSensorState,
-        *,
-        step: int,
-    ) -> np.ndarray:
-        config = self.config
-        if unit.slot != control.slot:
-            raise ValueError("unit frame and controller state refer to different slots")
-        if unit.slot < 0 or unit.slot >= config.space.unit_count:
-            raise ValueError("unit slot is out of range")
-        if step < 0:
-            raise ValueError("step must be non-negative")
+    ) -> Mapping[int, ObjectiveFrame]:
         objective_by_slot = {item.slot: item for item in objectives}
         if len(objective_by_slot) != len(objectives):
             raise ValueError("objective frames contain duplicate slots")
         if any(
-            slot < 0 or slot >= config.space.objective_count
+            slot < 0 or slot >= self.config.space.objective_count
             for slot in objective_by_slot
         ):
             raise ValueError("objective slot is out of range")
-        if (
-            control.current_objective_slot != NO_OBJECTIVE
-            and not 0
-            <= control.current_objective_slot
-            < config.space.objective_count
-        ):
-            raise ValueError("controller state has an out-of-range objective slot")
+        return objective_by_slot
 
+    def _shared_features(
+        self,
+        sensor_state: SharedSensorState,
+        *,
+        step: int,
+        sensor_ready_override: bool | None = None,
+    ) -> tuple[float, ...]:
+        config = self.config
         time_fraction = _clip(step / config.max_steps, 0.0, 1.0)
         sensor_available_fraction = (
             sensor_state.available / sensor_state.config.capacity
@@ -220,13 +346,107 @@ class JointObservationEncoder:
             if sensor_state.config.capacity > 0
             else 0.0
         )
-        values: list[float] = [
+        sensor_ready = (
+            sensor_state.is_ready(step)
+            if sensor_ready_override is None
+            else bool(sensor_ready_override)
+        )
+        return (
             time_fraction,
             1.0 - time_fraction,
             _clip(sensor_available_fraction, 0.0, 1.0),
             _clip(sensor_pending_fraction, 0.0, 1.0),
-            float(sensor_state.is_ready(step)),
-        ]
+            float(sensor_ready),
+        )
+
+    def encode_many(
+        self,
+        units: Sequence[UnitFrame],
+        controls: Sequence[UnitControlState],
+        objectives: Sequence[ObjectiveFrame],
+        sensor_state: SharedSensorState,
+        *,
+        step: int,
+        sensor_ready_override: bool | None = None,
+    ) -> tuple[np.ndarray, ...]:
+        """Encode a team while indexing shared objective frames only once."""
+
+        if len(units) != len(controls):
+            raise ValueError("units and controller states must have equal lengths")
+        if step < 0:
+            raise ValueError("step must be non-negative")
+        objective_by_slot = self._index_objectives(objectives)
+        shared_features = self._shared_features(
+            sensor_state,
+            step=step,
+            sensor_ready_override=sensor_ready_override,
+        )
+        return tuple(
+            self._encode_one(
+                unit,
+                control,
+                objective_by_slot,
+                sensor_state,
+                step=step,
+                shared_features=shared_features,
+            )
+            for unit, control in zip(units, controls)
+        )
+
+    def encode(
+        self,
+        unit: UnitFrame,
+        control: UnitControlState,
+        objectives: Sequence[ObjectiveFrame],
+        sensor_state: SharedSensorState,
+        *,
+        step: int,
+        sensor_ready_override: bool | None = None,
+    ) -> np.ndarray:
+        return self._encode_one(
+            unit,
+            control,
+            self._index_objectives(objectives),
+            sensor_state,
+            step=step,
+            sensor_ready_override=sensor_ready_override,
+        )
+
+    def _encode_one(
+        self,
+        unit: UnitFrame,
+        control: UnitControlState,
+        objective_by_slot: Mapping[int, ObjectiveFrame],
+        sensor_state: SharedSensorState,
+        *,
+        step: int,
+        shared_features: tuple[float, ...] | None = None,
+        sensor_ready_override: bool | None = None,
+    ) -> np.ndarray:
+        config = self.config
+        if unit.slot != control.slot:
+            raise ValueError("unit frame and controller state refer to different slots")
+        if unit.slot < 0 or unit.slot >= config.space.unit_count:
+            raise ValueError("unit slot is out of range")
+        if step < 0:
+            raise ValueError("step must be non-negative")
+        if (
+            control.current_objective_slot != NO_OBJECTIVE
+            and not 0
+            <= control.current_objective_slot
+            < config.space.objective_count
+        ):
+            raise ValueError("controller state has an out-of-range objective slot")
+
+        values = list(
+            self._shared_features(
+                sensor_state,
+                step=step,
+                sensor_ready_override=sensor_ready_override,
+            )
+            if shared_features is None
+            else shared_features
+        )
         values.extend(float(control.phase == phase) for phase in UnitPhase)
 
         raw_x, raw_y, raw_altitude = unit.position
@@ -238,9 +458,9 @@ class JointObservationEncoder:
         )
         x, y, altitude = _finite(raw_x), _finite(raw_y), _finite(raw_altitude)
         vx, vy = _finite(unit.velocity_xy[0]), _finite(unit.velocity_xy[1])
-        x_span = config.bounds.x_max - config.bounds.x_min
-        y_span = config.bounds.y_max - config.bounds.y_min
-        altitude_span = config.bounds.altitude_max - config.bounds.altitude_min
+        x_span = self._x_span
+        y_span = self._y_span
+        altitude_span = self._altitude_span
         normalized_x = 2.0 * (float(x) - config.bounds.x_min) / x_span - 1.0
         normalized_y = 2.0 * (float(y) - config.bounds.y_min) / y_span - 1.0
         normalized_altitude = (
@@ -259,22 +479,94 @@ class JointObservationEncoder:
                 float(unit.visible),
                 self._age(step, control.activated_step),
                 self._age(step, control.last_objective_change_step),
+                unit.target_progress_reference,
+                unit.target_progress_fraction,
             )
         )
         values.extend(float(control.last_movement == movement) for movement in Movement)
-        values.extend(_one_hot(unit.type_index, config.unit_type_count))
+        values.extend(self._cached_one_hot(unit.type_index, self._unit_type_vectors))
+
+        diagonal = self._map_diagonal
+        # A staged entity has no meaningful own position yet, but its placement
+        # head still needs the public objective geometry.  In that case use the
+        # map centre as an explicit reference.  ``self_position_known`` remains
+        # zero, so this cannot be confused with an observed entity position.
+        geometry_x = x if position_known else self._map_center_x
+        geometry_y = y if position_known else self._map_center_y
+        threat_position_finite = all(
+            math.isfinite(float(value)) for value in unit.nearest_threat_position
+        )
+        threat_known = (
+            bool(unit.nearest_threat_known)
+            and threat_position_finite
+        )
+        values.append(
+            _clip(
+                unit.detected_threat_count
+                / config.detected_threat_count_normalizer,
+                0.0,
+                1.0,
+            )
+        )
+        if threat_known:
+            threat_dx = float(unit.nearest_threat_position[0]) - float(geometry_x)
+            threat_dy = float(unit.nearest_threat_position[1]) - float(geometry_y)
+            threat_distance = math.hypot(threat_dx, threat_dy)
+            threat_bearing = (
+                math.atan2(threat_dy, threat_dx) if threat_distance > 0.0 else 0.0
+            )
+            threat_velocity_known = bool(
+                unit.nearest_threat_velocity_known
+            ) and all(
+                math.isfinite(float(value))
+                for value in unit.nearest_threat_velocity_xy
+            )
+            values.extend(
+                (
+                    1.0,
+                    _clip(threat_dx / x_span, -1.0, 1.0),
+                    _clip(threat_dy / y_span, -1.0, 1.0),
+                    _clip(threat_distance / diagonal, 0.0, 1.0),
+                    math.sin(threat_bearing),
+                    math.cos(threat_bearing),
+                    float(threat_velocity_known),
+                    _clip(
+                        unit.nearest_threat_velocity_xy[0] / config.max_speed,
+                        -1.0,
+                        1.0,
+                    )
+                    if threat_velocity_known
+                    else 0.0,
+                    _clip(
+                        unit.nearest_threat_velocity_xy[1] / config.max_speed,
+                        -1.0,
+                        1.0,
+                    )
+                    if threat_velocity_known
+                    else 0.0,
+                    _clip(
+                        unit.nearest_threat_age_steps
+                        / config.max_track_age_steps,
+                        0.0,
+                        1.0,
+                    ),
+                )
+            )
+        else:
+            values.extend([0.0] * 10)
         current_index = (
             0
             if control.current_objective_slot == NO_OBJECTIVE
             else control.current_objective_slot + 1
         )
-        values.extend(_one_hot(current_index, config.space.objective_count + 1))
+        values.extend(
+            self._cached_one_hot(current_index, self._current_objective_vectors)
+        )
 
-        diagonal = math.hypot(x_span, y_span)
         for slot in range(config.space.objective_count):
             objective = objective_by_slot.get(slot)
             if objective is None:
-                values.extend([0.0] * (11 + config.objective_type_count))
+                values.extend(self._empty_objective_features)
                 continue
             valid = bool(objective.valid)
             objective_position_finite = all(
@@ -283,12 +575,11 @@ class JointObservationEncoder:
             known = (
                 valid
                 and bool(objective.known)
-                and position_known
                 and objective_position_finite
             )
             if known:
-                dx = float(objective.position[0]) - float(x)
-                dy = float(objective.position[1]) - float(y)
+                dx = float(objective.position[0]) - float(geometry_x)
+                dy = float(objective.position[1]) - float(geometry_y)
                 distance = math.hypot(dx, dy)
                 bearing = math.atan2(dy, dx) if distance > 0.0 else 0.0
                 objective_velocity_known = bool(objective.velocity_known) and all(
@@ -318,16 +609,28 @@ class JointObservationEncoder:
                     )
                 )
                 values.extend(
-                    _one_hot(objective.type_index, config.objective_type_count)
+                    self._cached_one_hot(
+                        objective.type_index,
+                        self._objective_type_vectors,
+                    )
                 )
             else:
                 values.extend((float(valid), 0.0))
                 values.extend([0.0] * (9 + config.objective_type_count))
+            values.extend(
+                (
+                    objective.assigned_total,
+                    objective.assigned_high,
+                    objective.assigned_medium,
+                    objective.assigned_low,
+                )
+            )
 
         encoded = np.asarray(values, dtype=np.float32)
-        if encoded.shape != (self.dimension,):
+        if encoded.shape != (len(self._feature_names),):
             raise AssertionError(
-                f"encoder produced {encoded.shape}, expected {(self.dimension,)}"
+                "encoder produced "
+                f"{encoded.shape}, expected {(len(self._feature_names),)}"
             )
         if not bool(np.isfinite(encoded).all()):
             raise ValueError("encoded observation contains a non-finite value")

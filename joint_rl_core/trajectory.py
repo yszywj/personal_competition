@@ -100,6 +100,12 @@ class JointPolicyTrace:
     values_by_unit: tuple[float, ...]
     team_value: float
     shared_sensor: SharedSensorPolicyTrace | None = None
+    # Optional branch-specific baselines.  ``None`` keeps legacy checkpoints
+    # and callers valid while allowing planning, movement and sensor returns to
+    # use independent critics.
+    plan_values_by_unit: tuple[float, ...] | None = None
+    motion_values_by_unit: tuple[float, ...] | None = None
+    sensor_value: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -115,6 +121,16 @@ class JointPolicyTrace:
             tuple(float(value) for value in self.values_by_unit),
         )
         object.__setattr__(self, "team_value", float(self.team_value))
+        for name in ("plan_values_by_unit", "motion_values_by_unit"):
+            raw_values = getattr(self, name)
+            if raw_values is not None:
+                object.__setattr__(
+                    self,
+                    name,
+                    tuple(float(value) for value in raw_values),
+                )
+        if self.sensor_value is not None:
+            object.__setattr__(self, "sensor_value", float(self.sensor_value))
 
     @property
     def total_log_prob(self) -> float:
@@ -141,10 +157,23 @@ class JointPolicyTrace:
             )
         if len(self.values_by_unit) != len(states):
             raise ValueError("policy trace must contain one value per unit")
+        branch_values: tuple[float, ...] = ()
+        for name in ("plan_values_by_unit", "motion_values_by_unit"):
+            raw_values = getattr(self, name)
+            if raw_values is None:
+                continue
+            if len(raw_values) != len(states):
+                raise ValueError(f"{name} must contain one value per unit")
+            branch_values += raw_values
+        sensor_values = (
+            () if self.sensor_value is None else (float(self.sensor_value),)
+        )
         values = np.asarray(
             tuple(self.log_prob_by_term.values())
             + self.values_by_unit
-            + (float(self.team_value),),
+            + (float(self.team_value),)
+            + branch_values
+            + sensor_values,
             dtype=float,
         )
         if not bool(np.isfinite(values).all()):
@@ -179,6 +208,12 @@ class JointTransition:
     truncated: tuple[bool, ...]
     team_terminated: bool = False
     team_truncated: bool = False
+    # Explicit reward channels are optional for source compatibility.  New
+    # branch-aware trainers should populate all three instead of inferring
+    # planning or sensor credit from ``rewards``.
+    plan_rewards: tuple[float, ...] | None = None
+    motion_rewards: tuple[float, ...] | None = None
+    sensor_reward: float | None = None
 
 
 class JointTrajectoryBuffer:
@@ -205,7 +240,102 @@ class JointTrajectoryBuffer:
     def clear(self) -> None:
         self._items.clear()
 
+    def extend(self, other: "JointTrajectoryBuffer") -> None:
+        """Append validated immutable copies of another compatible buffer."""
+
+        self._validate_compatible_buffer(other, operation="extend")
+        for transition in other.items:
+            self.append(transition)
+
+    def extend_snapshots(self, other: "JointTrajectoryBuffer") -> None:
+        """Append another buffer's already immutable transition snapshots.
+
+        Unlike :meth:`extend`, this method deliberately shares snapshot
+        objects.  It is intended for merging collector-owned buffers after
+        :meth:`append` has already performed defensive copies and validation.
+        Every nested array in such a snapshot is backed by immutable bytes and
+        all other records are frozen, so clearing the source buffer cannot
+        mutate the destination.
+        """
+
+        self._validate_compatible_buffer(other, operation="extend snapshots from")
+        self._items.extend(other._items)
+
+    def with_episode_plan_rewards(
+        self,
+        plan_rewards: Sequence[float],
+    ) -> "JointTrajectoryBuffer":
+        """Return shallow snapshot replacements with final episode credit.
+
+        Planning credit is known only after an episode finishes.  Replacing
+        the frozen transition records is sufficient here: the observations,
+        masks, actions and traces in this buffer are already immutable,
+        validated snapshots and therefore do not need to be copied again.
+        """
+
+        if len(plan_rewards) != self.space.unit_count:
+            raise ValueError("plan_rewards must contain one reward per unit")
+        validated_plan_rewards = tuple(float(value) for value in plan_rewards)
+        if not bool(
+            np.isfinite(np.asarray(validated_plan_rewards, dtype=float)).all()
+        ):
+            raise ValueError("plan_rewards contain a non-finite value")
+
+        finalized = JointTrajectoryBuffer(self.space, self.observation_dim)
+        finalized._items = [
+            replace(
+                transition,
+                plan_rewards=validated_plan_rewards,
+                motion_rewards=transition.rewards,
+                sensor_reward=(
+                    transition.team_reward
+                    if transition.sensor_reward is None
+                    else transition.sensor_reward
+                ),
+            )
+            for transition in self._items
+        ]
+        return finalized
+
+    def _validate_compatible_buffer(
+        self,
+        other: "JointTrajectoryBuffer",
+        *,
+        operation: str,
+    ) -> None:
+        if not isinstance(other, JointTrajectoryBuffer):
+            raise TypeError(f"{operation} expects a JointTrajectoryBuffer")
+        if other is self:
+            raise ValueError(f"a trajectory buffer cannot {operation} itself")
+        if other.space != self.space:
+            raise ValueError("trajectory buffers use different joint spaces")
+        if other.observation_dim != self.observation_dim:
+            raise ValueError(
+                "trajectory buffers use different observation dimensions"
+            )
+
     def append(self, transition: JointTransition) -> None:
+        """Validate and defensively copy a transition from an arbitrary caller."""
+
+        self._append(transition, reuse_frozen_records=False)
+
+    def append_collected(self, transition: JointTransition) -> None:
+        """Append collector data while reusing intrinsically frozen records.
+
+        Observations and scalar sequences still receive defensive snapshots.
+        Masks and policy traces already make their mappings and nested arrays
+        immutable during construction, while actions and control states are
+        frozen dataclasses, so copying those records again adds no isolation.
+        """
+
+        self._append(transition, reuse_frozen_records=True)
+
+    def _append(
+        self,
+        transition: JointTransition,
+        *,
+        reuse_frozen_records: bool,
+    ) -> None:
         expected_count = self.space.unit_count
         fields = (
             transition.observations,
@@ -237,12 +367,45 @@ class JointTrajectoryBuffer:
         )
         observations = self._copy_observations(transition.observations)
         next_observations = self._copy_observations(transition.next_observations)
-        states = tuple(replace(state) for state in transition.states)
-        mask = self._copy_mask(transition.mask)
+        states = (
+            tuple(transition.states)
+            if reuse_frozen_records
+            else tuple(replace(state) for state in transition.states)
+        )
+        mask = (
+            transition.mask
+            if reuse_frozen_records
+            else self._copy_mask(transition.mask)
+        )
         action = canonicalize_joint_action(states, transition.action)
-        trace = self._copy_trace(transition.trace)
+        trace = (
+            transition.trace
+            if reuse_frozen_records
+            else self._copy_trace(transition.trace)
+        )
         rewards = tuple(float(value) for value in transition.rewards)
-        reward_values = np.asarray(rewards + (float(transition.team_reward),), dtype=float)
+        branch_rewards: dict[str, tuple[float, ...] | None] = {}
+        for name in ("plan_rewards", "motion_rewards"):
+            raw_values = getattr(transition, name)
+            if raw_values is None:
+                branch_rewards[name] = None
+                continue
+            if len(raw_values) != expected_count:
+                raise ValueError(f"{name} must contain one reward per unit")
+            branch_rewards[name] = tuple(float(value) for value in raw_values)
+        sensor_rewards = (
+            ()
+            if transition.sensor_reward is None
+            else (float(transition.sensor_reward),)
+        )
+        reward_values = np.asarray(
+            rewards
+            + (float(transition.team_reward),)
+            + (branch_rewards["plan_rewards"] or ())
+            + (branch_rewards["motion_rewards"] or ())
+            + sensor_rewards,
+            dtype=float,
+        )
         if not bool(np.isfinite(reward_values).all()):
             raise ValueError("transition rewards contain a non-finite value")
         terminated = tuple(bool(value) for value in transition.terminated)
@@ -266,6 +429,13 @@ class JointTrajectoryBuffer:
                 truncated=truncated,
                 team_terminated=bool(transition.team_terminated),
                 team_truncated=bool(transition.team_truncated),
+                plan_rewards=branch_rewards["plan_rewards"],
+                motion_rewards=branch_rewards["motion_rewards"],
+                sensor_reward=(
+                    None
+                    if transition.sensor_reward is None
+                    else float(transition.sensor_reward)
+                ),
             )
         )
 
@@ -319,4 +489,7 @@ class JointTrajectoryBuffer:
             values_by_unit=trace.values_by_unit,
             team_value=trace.team_value,
             shared_sensor=sensor_copy,
+            plan_values_by_unit=trace.plan_values_by_unit,
+            motion_values_by_unit=trace.motion_values_by_unit,
+            sensor_value=trace.sensor_value,
         )

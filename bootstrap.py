@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from pathlib import Path
 
 
 PERSONAL_ROOT = Path(__file__).resolve().parent
+TRAINING_RUNTIME_ROOT = PERSONAL_ROOT / ".runtime" / "training_runs"
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,17 @@ def discover_project_layout(
     candidates = (
         [Path(repository_override).expanduser()]
         if repository_override is not None
-        else [personal_root.parent / "competition-platform-env", personal_root.parent]
+        else [
+            # Current server layout.  A legacy/main checkout is harmless here:
+            # it is skipped unless it exposes the complete pku-style tree.
+            personal_root.parent / "competition_envs",
+            personal_root.parent / "competition-platform-env",
+            # The private glibc runtime keeps a verified, read-only origin/pku
+            # snapshot so native Linux training remains reproducible without
+            # changing the user's competition_envs worktree.
+            personal_root.parent / "glibc-2.38" / "runtime" / "pku",
+            personal_root.parent,
+        ]
     )
     for candidate in candidates:
         repository = candidate.resolve()
@@ -81,6 +93,23 @@ def validate_personal_output_path(path: Path) -> Path:
     if resolved == REPOSITORY_ROOT or REPOSITORY_ROOT in resolved.parents:
         raise ValueError(f"Output must be outside the upstream checkout: {resolved}")
     return resolved
+
+
+def training_runtime_path(result_dir: Path) -> Path:
+    """Return a private working directory that is separate from run results.
+
+    The simulator expects source resources below its current working directory,
+    so each training run needs a small symlink farm.  Keep that implementation
+    detail below the Git-ignored ``.runtime`` tree instead of exposing it as
+    apparent source code in the user's result directory.  The digest avoids a
+    collision when launchers use the same result leaf name under different
+    parent directories.
+    """
+
+    result_dir = validate_personal_output_path(result_dir)
+    digest = hashlib.sha256(str(result_dir).encode("utf-8")).hexdigest()[:12]
+    runtime_name = f"{result_dir.name}-{digest}"
+    return validate_personal_output_path(TRAINING_RUNTIME_ROOT / runtime_name)
 
 
 def prepare_runtime_directory(
