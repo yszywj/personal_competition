@@ -569,7 +569,9 @@ def _checkpoint_metadata(path: Path) -> dict[str, Any]:
         raise ValueError(f"Not a compatible joint PPO checkpoint: {path}")
     if checkpoint.get("algorithm") != JointPPOPolicy.ALGORITHM:
         raise ValueError(f"Checkpoint uses a different algorithm: {path}")
-    if int(checkpoint.get("schema_version", -1)) != JointPPOPolicy.CHECKPOINT_SCHEMA_VERSION:
+    if int(checkpoint.get("schema_version", -1)) not in {
+        3, JointPPOPolicy.CHECKPOINT_SCHEMA_VERSION
+    }:
         raise ValueError(f"Checkpoint uses an unsupported schema: {path}")
     if not isinstance(checkpoint.get("joint_env_contract"), dict):
         raise ValueError("Checkpoint has no environment contract")

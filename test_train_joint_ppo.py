@@ -68,7 +68,23 @@ class JointTrainerArgumentTests(unittest.TestCase):
         self.assertEqual(policy.learning_rate_final, 1e-5)
         self.assertEqual(policy.learning_rate_decay_updates, 100)
         self.assertEqual(policy.target_kl, 0.01)
+        self.assertEqual(policy.kl_guard_mode, "rollout_branch")
+        self.assertEqual(policy.min_actor_decisions, 128)
+        self.assertEqual(policy.training_phase, "joint")
+        self.assertEqual(policy.motion_behavior_mode, "curriculum")
+        self.assertEqual(policy.motion_curriculum_updates, 1)
+        self.assertEqual(policy.motion_actor_start_update, 0)
+        self.assertEqual(policy.sensor_actor_start_update, 0)
+        self.assertEqual(policy.kl_hard_multiplier, 3.0)
         self.assertEqual(policy.minibatch_size, 128)
+        self.assertTrue(game.strict_weapon_target_compatibility)
+        self.assertTrue(game.allow_low_altitude_search_fallback)
+        self.assertFalse(game.allow_low_altitude_search_replanning)
+        self.assertEqual(game.retarget_min_dwell_steps, 60)
+        self.assertEqual(game.retarget_decision_interval_steps, 60)
+        self.assertEqual(game.motion_decision_interval_steps, 20)
+        self.assertFalse(game.post_launch_motion_only)
+        self.assertFalse(policy.post_launch_motion_only)
         self.assertTrue(game.terminate_on_all_objectives_destroyed)
 
         final20_game = _game_config(
@@ -93,6 +109,22 @@ class JointTrainerArgumentTests(unittest.TestCase):
                 "2",
                 "--sensor-cooldown-steps",
                 "3",
+                "--training-phase",
+                "motion_only",
+                "--motion-behavior-mode",
+                "learned",
+                "--motion-curriculum-updates",
+                "7",
+                "--retarget-min-dwell-steps",
+                "17",
+                "--retarget-decision-interval-steps",
+                "19",
+                "--motion-decision-interval-steps",
+                "23",
+                "--post-launch-motion-only",
+                "--allow-low-altitude-search-replanning",
+                "--disable-weapon-target-compatibility",
+                "--disable-low-altitude-search-fallback",
                 "--official-reward-scale",
                 "0.75",
                 "--progress-potential-scale",
@@ -109,12 +141,24 @@ class JointTrainerArgumentTests(unittest.TestCase):
             ]
         )
         config = _game_config(args, gamma=args.gamma)
+        policy = _fresh_policy_config(args, observation_dim=37)
         self.assertEqual(config.objective_slots, 21)
         self.assertEqual(config.max_track_age_steps, 44)
         self.assertEqual(config.max_speed_mps, 1234.5)
         self.assertEqual(config.sensor_capacity, 7)
         self.assertEqual(config.sensor_max_requests_per_step, 2)
         self.assertEqual(config.sensor_cooldown_steps, 3)
+        self.assertEqual(config.retarget_min_dwell_steps, 17)
+        self.assertEqual(config.retarget_decision_interval_steps, 19)
+        self.assertEqual(config.motion_decision_interval_steps, 23)
+        self.assertTrue(config.post_launch_motion_only)
+        self.assertFalse(config.strict_weapon_target_compatibility)
+        self.assertFalse(config.allow_low_altitude_search_fallback)
+        self.assertTrue(config.allow_low_altitude_search_replanning)
+        self.assertEqual(policy.training_phase, "motion_only")
+        self.assertTrue(policy.post_launch_motion_only)
+        self.assertEqual(policy.motion_behavior_mode, "learned")
+        self.assertEqual(policy.motion_curriculum_updates, 7)
         self.assertEqual(config.official_reward_scale, 0.75)
         self.assertEqual(config.progress_potential_scale, 0.125)
         self.assertEqual(config.planning_team_weight, 0.6)
@@ -129,6 +173,16 @@ class JointTrainerArgumentTests(unittest.TestCase):
             ["--rollout-episodes", "0"],
             ["--debug-max-steps", "0"],
             ["--sensor-capacity", "-1"],
+            ["--min-actor-decisions", "-1"],
+            ["--motion-actor-start-update", "-1"],
+            ["--sensor-actor-start-update", "-1"],
+            ["--motion-curriculum-updates", "0"],
+            ["--retarget-min-dwell-steps", "-1"],
+            ["--retarget-decision-interval-steps", "0"],
+            ["--motion-decision-interval-steps", "0"],
+            ["--training-phase", "planner_sensor"],
+            ["--kl-hard-multiplier", "1.5"],
+            ["--kl-guard-mode", "unknown"],
             ["--gamma", "1.1"],
             ["--planning-team-weight", "0.8", "--planning-local-weight", "0.3"],
             ["--sensor-information-potential-scale", "-0.1"],
@@ -402,6 +456,12 @@ class JointTrainerPersistenceTests(unittest.TestCase):
                     sensor_information_potential_scale=0.015,
                     gamma=0.995,
                     terminate_on_all_objectives_destroyed=True,
+                    strict_weapon_target_compatibility=False,
+                    allow_low_altitude_search_fallback=True,
+                    allow_low_altitude_search_replanning=True,
+                    retarget_min_dwell_steps=0,
+                    retarget_decision_interval_steps=1,
+                    motion_decision_interval_steps=1,
                 ),
             )
             contract = _environment_contract(
@@ -413,6 +473,7 @@ class JointTrainerPersistenceTests(unittest.TestCase):
             contract["observation"],
             {"max_track_age_steps": 300, "max_speed_mps": 3000.0},
         )
+        self.assertNotIn("control", contract)
         self.assertEqual(
             contract["official_scoring"],
             {
@@ -427,6 +488,87 @@ class JointTrainerPersistenceTests(unittest.TestCase):
         self.assertEqual(restored.planning_team_weight, 0.7)
         self.assertEqual(restored.planning_local_weight, 0.3)
         self.assertEqual(restored.sensor_information_potential_scale, 0.015)
+        self.assertFalse(restored.strict_weapon_target_compatibility)
+        self.assertTrue(restored.allow_low_altitude_search_replanning)
+        self.assertEqual(restored.motion_decision_interval_steps, 1)
+        self.assertFalse(restored.post_launch_motion_only)
+        self.assertEqual(restored.retarget_min_dwell_steps, 0)
+        self.assertEqual(restored.retarget_decision_interval_steps, 1)
+
+        controlled_environment = SimpleNamespace(
+            **{
+                **environment.__dict__,
+                "config": SimpleNamespace(
+                    **{
+                        **environment.config.__dict__,
+                        "strict_weapon_target_compatibility": True,
+                        "allow_low_altitude_search_fallback": True,
+                        "allow_low_altitude_search_replanning": False,
+                        "retarget_min_dwell_steps": 60,
+                        "retarget_decision_interval_steps": 60,
+                        "motion_decision_interval_steps": 20,
+                    }
+                ),
+            }
+        )
+        with tempfile.TemporaryDirectory() as controlled_raw:
+            controlled_scenario = Path(controlled_raw) / "scenario.json"
+            controlled_scenario.write_text("{}", encoding="utf-8")
+            controlled_contract = _environment_contract(
+                controlled_environment,
+                scenario_id="TEST",
+                scenario_path=controlled_scenario,
+            )
+        self.assertEqual(
+            controlled_contract["control"],
+            {
+                "strict_weapon_target_compatibility": True,
+                "allow_low_altitude_search_fallback": True,
+                "allow_low_altitude_search_replanning": False,
+                "retarget_min_dwell_steps": 60,
+                "retarget_decision_interval_steps": 60,
+                "motion_decision_interval_steps": 20,
+            },
+        )
+        controlled_restored = _game_config_from_checkpoint_contract(
+            controlled_contract
+        )
+        self.assertTrue(controlled_restored.strict_weapon_target_compatibility)
+        self.assertFalse(controlled_restored.allow_low_altitude_search_replanning)
+        self.assertEqual(controlled_restored.motion_decision_interval_steps, 20)
+        self.assertFalse(controlled_restored.post_launch_motion_only)
+        self.assertEqual(controlled_restored.retarget_min_dwell_steps, 60)
+        self.assertEqual(controlled_restored.retarget_decision_interval_steps, 60)
+
+        post_launch_environment = SimpleNamespace(
+            **{
+                **environment.__dict__,
+                "config": SimpleNamespace(
+                    **{
+                        **environment.config.__dict__,
+                        "post_launch_motion_only": True,
+                    }
+                ),
+            }
+        )
+        with tempfile.TemporaryDirectory() as post_launch_raw:
+            post_launch_scenario = Path(post_launch_raw) / "scenario.json"
+            post_launch_scenario.write_text("{}", encoding="utf-8")
+            post_launch_contract = _environment_contract(
+                post_launch_environment,
+                scenario_id="TEST",
+                scenario_path=post_launch_scenario,
+            )
+        self.assertTrue(post_launch_contract["control"]["post_launch_motion_only"])
+        self.assertTrue(
+            _game_config_from_checkpoint_contract(
+                post_launch_contract
+            ).post_launch_motion_only
+        )
+        self.assertEqual(
+            _warm_start_contract_differences(contract, post_launch_contract),
+            (),
+        )
 
         tuned = dict(contract)
         tuned["sensor"] = {**contract["sensor"], "coordinated_team_capacity": 7}
@@ -516,6 +658,11 @@ class JointTrainerCollectionTests(unittest.TestCase):
                 device="cpu",
             ),
         )
+        with torch.no_grad():
+            policy.network.activation_head.weight.zero_()
+            policy.network.activation_head.bias.copy_(
+                torch.tensor((-100.0, 100.0))
+            )
 
         class FakeEnvironment:
             observation_dim = 4
@@ -547,6 +694,9 @@ class JointTrainerCollectionTests(unittest.TestCase):
 
             def action_mask(self):
                 return mask
+
+            def assignment_is_damage_compatible(self, _unit_slot, _objective_slot):
+                return True
 
             def step(self, _action):
                 self.current_step = 1

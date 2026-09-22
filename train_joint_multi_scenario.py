@@ -64,16 +64,19 @@ SCENARIO_SUITES: Mapping[str, tuple[str, ...]] = {
 # Backward-compatible name for callers that launch the original nine cases.
 ALL_SCENARIOS = SCENARIO_SUITES["legacy"]
 LAUNCHER_SCHEMA = "personal-joint-ppo-multi"
-LAUNCHER_SCHEMA_VERSION = 2
-_COMPATIBLE_LAUNCHER_SCHEMA_VERSIONS = frozenset({1, LAUNCHER_SCHEMA_VERSION})
+LAUNCHER_SCHEMA_VERSION = 3
+_COMPATIBLE_LAUNCHER_SCHEMA_VERSIONS = frozenset(
+    {1, 2, LAUNCHER_SCHEMA_VERSION}
+)
 JOINT_ALGORITHM = "personal_joint_masked_ppo"
-JOINT_CHECKPOINT_SCHEMA_VERSION = 3
+JOINT_CHECKPOINT_SCHEMA_VERSION = 4
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _GPU_ID = re.compile(r"^(?:[0-9]+|GPU-[A-Fa-f0-9-]+)$")
 _CPU_SET = re.compile(r"^[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*$")
 _TIMESTAMP = re.compile(r"^[0-9]{8}_[0-9]{6}_[0-9]{6}$")
 _RESUME_FILENAME = re.compile(r"^(?:latest\.pt|round_[0-9]+\.pt)$")
+_INIT_FILENAME = re.compile(r"^(?:best\.pt|latest\.pt|round_[0-9]+\.pt)$")
 _PROTECTED_TRAINER_OPTIONS = frozenset(
     {
         "--scenario",
@@ -105,6 +108,7 @@ class ResumeCheckpoint:
     source_batch: str | None = None
     suite: str = "legacy"
     scenario_selector: str | None = None
+    mode: str = "resume"
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,7 @@ class JobPlan:
     suite: str = "legacy"
     scenario_selector: str | None = None
     scenario_file: Path | None = None
+    init_from: ResumeCheckpoint | None = None
 
     @property
     def run_name(self) -> str:
@@ -123,7 +128,17 @@ class JobPlan:
 
     @property
     def initialization(self) -> str:
-        return "full_policy_state" if self.resume is not None else "fresh_random"
+        if self.resume is not None:
+            return "full_policy_state"
+        if self.init_from is not None:
+            return "weights_only_warm_start"
+        return "fresh_random"
+
+    @property
+    def checkpoint_source(self) -> ResumeCheckpoint | None:
+        if self.resume is not None and self.init_from is not None:
+            raise ValueError("A job cannot both resume and warm-start")
+        return self.resume or self.init_from
 
     @property
     def selector(self) -> str:
@@ -397,6 +412,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         metavar="CASE=CHECKPOINT",
         help="Explicit per-case safe checkpoint; repeat for multiple cases.",
     )
+    parser.add_argument(
+        "--init-from",
+        action="append",
+        default=[],
+        metavar="CASE=CHECKPOINT",
+        help=(
+            "Explicit per-case weights-only warm-start checkpoint; repeat for multiple "
+            "cases. Fresh optimizer, counters, RNG and CLI hyperparameters are used."
+        ),
+    )
     parser.add_argument("--batch-id", default=None)
     parser.add_argument("--stop-timeout", type=float, default=3600.0)
     parser.add_argument("--poll-interval", type=float, default=0.5)
@@ -441,8 +466,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args.scenarios = scenarios
     if args.batch_id is not None and not _SAFE_ID.fullmatch(args.batch_id):
         parser.error("--batch-id must use only A-Z, a-z, 0-9, _, ., - and be at most 64 characters")
-    if args.resume_batch is not None and args.resume_from:
-        parser.error("--resume-batch and --resume-from cannot be combined")
+    if sum(bool(value) for value in (args.resume_batch, args.resume_from, args.init_from)) > 1:
+        parser.error("--resume-batch, --resume-from and --init-from are mutually exclusive")
     try:
         args.devices = parse_devices(
             args.gpu_ids,
@@ -506,6 +531,16 @@ def _validate_resume_path(path: Path) -> None:
         )
 
 
+def _validate_init_path(path: Path) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"Warm-start checkpoint does not exist: {path}")
+    if not _INIT_FILENAME.fullmatch(path.name):
+        raise ValueError(
+            "Joint --init-from accepts only best.pt, latest.pt or a numbered "
+            f"round_*.pt checkpoint; got {path.name}"
+        )
+
+
 def resolve_explicit_resumes(
     values: Sequence[str],
     scenarios: Sequence[str],
@@ -533,6 +568,38 @@ def resolve_explicit_resumes(
             selection="explicit",
             suite=suite,
             scenario_selector=scenario_selector(suite, scenario),
+        )
+    return result
+
+
+def resolve_explicit_initializations(
+    values: Sequence[str],
+    scenarios: Sequence[str],
+    invocation_cwd: Path,
+    *,
+    suite: str = "legacy",
+) -> dict[str, ResumeCheckpoint]:
+    selected = set(scenarios)
+    result: dict[str, ResumeCheckpoint] = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError("--init-from must use CASE=CHECKPOINT")
+        scenario_text, path_text = value.split("=", 1)
+        scenario = scenario_text.strip().upper()
+        if scenario not in selected:
+            raise ValueError(f"Warm-start scenario is not selected: {scenario}")
+        if scenario in result:
+            raise ValueError(f"Duplicate warm-start checkpoint for {scenario}")
+        path = _resolve_file(path_text.strip(), invocation_cwd)
+        _validate_init_path(path)
+        result[scenario] = ResumeCheckpoint(
+            scenario=scenario,
+            path=path,
+            sha256=_sha256_file(path),
+            selection="explicit_warm_start",
+            suite=suite,
+            scenario_selector=scenario_selector(suite, scenario),
+            mode="init_from",
         )
     return result
 
@@ -629,27 +696,43 @@ def build_job_plans(
     timestamp: str,
     resumes: Mapping[str, ResumeCheckpoint] | None = None,
     *,
+    init_froms: Mapping[str, ResumeCheckpoint] | None = None,
     suite: str = "legacy",
     repository_root: Path = REPOSITORY_ROOT,
 ) -> list[JobPlan]:
     if not _TIMESTAMP.fullmatch(timestamp):
         raise ValueError("Output timestamp must use YYYYMMDD_HHMMSS_microseconds")
     resume_by_scenario = dict(resumes or {})
-    unexpected = set(resume_by_scenario) - set(scenarios)
+    init_by_scenario = dict(init_froms or {})
+    overlap = set(resume_by_scenario) & set(init_by_scenario)
+    if overlap:
+        raise ValueError(
+            "Scenarios cannot both resume and warm-start: "
+            + ", ".join(sorted(overlap))
+        )
+    unexpected = (set(resume_by_scenario) | set(init_by_scenario)) - set(scenarios)
     if unexpected:
-        raise ValueError("Resume checkpoints supplied for unselected scenarios: " + ", ".join(sorted(unexpected)))
+        raise ValueError(
+            "Checkpoint sources supplied for unselected scenarios: "
+            + ", ".join(sorted(unexpected))
+        )
     plans: list[JobPlan] = []
     for scenario in scenarios:
         selector = scenario_selector(suite, scenario)
         resume = resume_by_scenario.get(scenario)
-        if resume is not None and (
-            resume.scenario != scenario
-            or resume.suite != suite
-            or (resume.scenario_selector or selector) != selector
+        init_from = init_by_scenario.get(scenario)
+        source = resume or init_from
+        expected_mode = "resume" if resume is not None else "init_from"
+        if source is not None and (
+            source.mode != expected_mode
+            or source.scenario != scenario
+            or source.suite != suite
+            or (source.scenario_selector or selector) != selector
         ):
             raise ValueError(
-                "Resume scenario mismatch: "
-                f"plan={suite}/{scenario} checkpoint={resume.suite}/{resume.scenario}"
+                "Checkpoint source mismatch: "
+                f"plan={suite}/{scenario}/{expected_mode} "
+                f"checkpoint={source.suite}/{source.scenario}/{source.mode}"
             )
         output_label = scenario.lower() if suite == "legacy" else f"{suite}_{scenario.lower()}"
         run_name = f"{output_label}_joint_ppo_{timestamp}"
@@ -662,6 +745,7 @@ def build_job_plans(
                 suite=suite,
                 scenario_selector=selector,
                 scenario_file=scenario_file_path(repository_root, suite, scenario),
+                init_from=init_from,
             )
         )
     return plans
@@ -707,6 +791,8 @@ def validate_outputs_available(batch_id: str, plans: Sequence[JobPlan]) -> Path:
             raise FileExistsError("Training output already exists: " + ", ".join(existing))
         if plan.resume is not None:
             _validate_resume_path(plan.resume.path)
+        if plan.init_from is not None:
+            _validate_init_path(plan.init_from.path)
     return launcher_root
 
 
@@ -855,6 +941,8 @@ def trainer_command(
     )
     if plan.resume is not None:
         command.extend(("--resume", str(plan.resume.path)))
+    elif plan.init_from is not None:
+        command.extend(("--init-from", str(plan.init_from.path)))
     if args.verbose_workers:
         command.append("--verbose")
     command.extend(args.trainer_args)
@@ -905,6 +993,10 @@ def _resume_document(resume: ResumeCheckpoint | None) -> dict[str, Any] | None:
     return asdict(resume) | {"path": str(resume.path)} if resume is not None else None
 
 
+def _source_document(source: ResumeCheckpoint | None) -> dict[str, Any] | None:
+    return asdict(source) | {"path": str(source.path)} if source is not None else None
+
+
 def batch_plan_document(
     args: argparse.Namespace,
     plans: Sequence[JobPlan],
@@ -936,7 +1028,9 @@ def batch_plan_document(
                 "initialization": plan.initialization,
                 "result_dir": str(plan.result_dir),
                 "model_dir": str(plan.model_dir),
+                "checkpoint_source": _source_document(plan.checkpoint_source),
                 "resume": _resume_document(plan.resume),
+                "init_from": _source_document(plan.init_from),
             }
             for plan in plans
         ],
@@ -951,7 +1045,9 @@ def _empty_states(plans: Sequence[JobPlan]) -> dict[str, dict[str, Any]]:
             "scenario_selector": plan.selector,
             "status": "pending",
             "initialization": plan.initialization,
+            "checkpoint_source": _source_document(plan.checkpoint_source),
             "resume": str(plan.resume.path) if plan.resume else None,
+            "init_from": str(plan.init_from.path) if plan.init_from else None,
             "result_dir": str(plan.result_dir),
             "model_dir": str(plan.model_dir),
             "slot": None,
@@ -1324,8 +1420,12 @@ def run_batch(
                 )
                 log_stream = None
                 try:
-                    if plan.resume is not None and _sha256_file(plan.resume.path) != plan.resume.sha256:
-                        raise ValueError(f"Resume checkpoint changed before launch: {plan.resume.path}")
+                    source = plan.checkpoint_source
+                    if source is not None and _sha256_file(source.path) != source.sha256:
+                        label = "Resume" if source.mode == "resume" else "Warm-start"
+                        raise ValueError(
+                            f"{label} checkpoint changed before launch: {source.path}"
+                        )
                     command = trainer_command(args, plan, slot)
                     environment = worker_environment(args, plan, slot, launcher_root)
                     log_stream = (launcher_root / "logs" / f"{plan.output_label}.log").open(
@@ -1472,7 +1572,9 @@ def dry_run_document(
                 "initialization": plan.initialization,
                 "result_dir": str(plan.result_dir),
                 "model_dir": str(plan.model_dir),
+                "checkpoint_source": _source_document(plan.checkpoint_source),
                 "resume": _resume_document(plan.resume),
+                "init_from": _source_document(plan.init_from),
                 "environment": environment,
                 "command": trainer_command(args, plan, slot),
             }
@@ -1509,12 +1611,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             invocation_cwd,
             suite=args.suite,
         )
+    init_froms = resolve_explicit_initializations(
+        args.init_from,
+        args.scenarios,
+        invocation_cwd,
+        suite=args.suite,
+    )
     timestamp = make_timestamp()
     args.batch_id = make_batch_id(args.batch_id, timestamp=timestamp)
     plans = build_job_plans(
         args.scenarios,
         timestamp,
         resumes,
+        init_froms=init_froms,
         suite=args.suite,
         repository_root=args.repository_root,
     )

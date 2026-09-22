@@ -152,6 +152,19 @@ _ROUND_COLUMNS = (
     "plan_decisions",
     "motion_decisions",
     "sensor_decisions",
+    "plan_actor_n_eff",
+    "motion_actor_n_eff",
+    "sensor_actor_n_eff",
+    "plan_actor_enabled",
+    "motion_actor_enabled",
+    "sensor_actor_enabled",
+    "plan_actor_kl_stopped",
+    "motion_actor_kl_stopped",
+    "sensor_actor_kl_stopped",
+    "kl_guard_epochs",
+    "kl_soft_threshold",
+    "kl_hard_threshold",
+    "hard_kl_stopped",
     "plan_value_samples",
     "motion_value_samples",
     "sensor_value_samples",
@@ -199,6 +212,25 @@ _UPDATE_COLUMNS = (
     "plan_decisions",
     "motion_decisions",
     "sensor_decisions",
+    "plan_actor_n_eff",
+    "motion_actor_n_eff",
+    "sensor_actor_n_eff",
+    "plan_actor_enabled",
+    "motion_actor_enabled",
+    "sensor_actor_enabled",
+    "plan_actor_enabled_after_kl_guard",
+    "motion_actor_enabled_after_kl_guard",
+    "sensor_actor_enabled_after_kl_guard",
+    "plan_actor_kl_stopped",
+    "motion_actor_kl_stopped",
+    "sensor_actor_kl_stopped",
+    "plan_actor_minibatch_updates",
+    "motion_actor_minibatch_updates",
+    "sensor_actor_minibatch_updates",
+    "kl_guard_epochs",
+    "kl_soft_threshold",
+    "kl_hard_threshold",
+    "hard_kl_stopped",
     "plan_value_samples",
     "motion_value_samples",
     "sensor_value_samples",
@@ -326,6 +358,75 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--entropy-final-coef", type=float, default=0.0002)
     parser.add_argument("--entropy-decay-updates", type=int, default=500)
     parser.add_argument("--target-kl", type=float, default=0.01)
+    parser.add_argument(
+        "--kl-guard-mode",
+        choices=("rollout_branch", "legacy_minibatch_max"),
+        default="rollout_branch",
+        help=(
+            "Use reliable full-rollout branch KL for new runs; the legacy mode "
+            "exists only for exact continuation/diagnostic comparison."
+        ),
+    )
+    parser.add_argument(
+        "--min-actor-decisions",
+        type=int,
+        default=128,
+        help=(
+            "Minimum effective rollout decisions required to update and KL-guard "
+            "one actor branch; its critic still trains below this threshold."
+        ),
+    )
+    parser.add_argument(
+        "--training-phase",
+        choices=("joint", "planner_sensor", "motion_only"),
+        default="joint",
+        help="Train all branches, planner/sensor only, or motion only.",
+    )
+    parser.add_argument(
+        "--motion-behavior-mode",
+        choices=("neutral", "curriculum", "learned"),
+        default="curriculum",
+        help=(
+            "Explicit motion rollout distribution: deterministic NEUTRAL, a "
+            "NEUTRAL/learned probability curriculum, or fully learned."
+        ),
+    )
+    parser.add_argument(
+        "--motion-curriculum-updates",
+        type=int,
+        default=1,
+        help=(
+            "Number of PPO updates used to ramp the learned motion mixture from "
+            "its first active fraction to one."
+        ),
+    )
+    parser.add_argument(
+        "--motion-actor-start-update",
+        type=int,
+        default=0,
+        help=(
+            "PPO update index at which motion stops being scripted NEUTRAL "
+            "and begins sampled actor training."
+        ),
+    )
+    parser.add_argument(
+        "--sensor-actor-start-update",
+        type=int,
+        default=0,
+        help=(
+            "PPO update index at which sensor stops being scripted STOP "
+            "and begins sampled actor training."
+        ),
+    )
+    parser.add_argument(
+        "--kl-hard-multiplier",
+        type=float,
+        default=3.0,
+        help=(
+            "Stop all remaining epochs only when a reliable rollout-level branch KL "
+            "exceeds this multiple of --target-kl."
+        ),
+    )
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--update-epochs", type=int, default=4)
     parser.add_argument("--minibatch-size", type=int, default=128)
@@ -357,6 +458,73 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--sensor-max-requests-per-step", type=int, default=1)
     parser.add_argument("--sensor-cooldown-steps", type=int, default=0)
+    parser.add_argument(
+        "--retarget-min-dwell-steps",
+        type=int,
+        default=60,
+        help=(
+            "Minimum steps to keep a still-valid objective before another retarget "
+            "decision; use zero together with decision interval one to restore "
+            "the legacy every-step gate."
+        ),
+    )
+    parser.add_argument(
+        "--retarget-decision-interval-steps",
+        type=int,
+        default=60,
+        help=(
+            "After the minimum dwell, expose a still-valid retarget decision "
+            "only at this interval; invalid targets still unlock immediately."
+        ),
+    )
+    parser.add_argument(
+        "--motion-decision-interval-steps",
+        type=int,
+        default=20,
+        help=(
+            "Expose learned movement choices as low-frequency control pulses at "
+            "this interval; forced NEUTRAL steps remain motion-critic samples."
+        ),
+    )
+    parser.add_argument(
+        "--post-launch-motion-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Force NEUTRAL movement on the launch step and expose learned "
+            "movement only after activation is confirmed; in motion_only "
+            "training, freeze the launch-conditional movement head."
+        ),
+    )
+    parser.add_argument(
+        "--allow-low-altitude-search-replanning",
+        action="store_true",
+        default=False,
+        help=(
+            "Allow an L missile using a public search/navigation anchor to "
+            "reselect that anchor before a ship is legally detected."
+        ),
+    )
+    parser.add_argument(
+        "--disable-weapon-target-compatibility",
+        dest="strict_weapon_target_compatibility",
+        action="store_false",
+        default=True,
+        help=(
+            "Restore legacy target masks that permit physically ineffective "
+            "weapon/target pairs."
+        ),
+    )
+    parser.add_argument(
+        "--disable-low-altitude-search-fallback",
+        dest="allow_low_altitude_search_fallback",
+        action="store_false",
+        default=True,
+        help=(
+            "Make L missiles wait for a legally known ship instead of using "
+            "public land objectives as temporary search/navigation anchors."
+        ),
+    )
     parser.add_argument("--official-reward-scale", type=float, default=1.0)
     parser.add_argument("--progress-potential-scale", type=float, default=0.05)
     parser.add_argument(
@@ -406,11 +574,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "hidden_dim",
         "learning_rate_decay_updates",
         "entropy_decay_updates",
+        "motion_curriculum_updates",
         "update_epochs",
         "minibatch_size",
         "value_inference_batch_size",
         "max_track_age_steps",
         "sensor_max_requests_per_step",
+        "retarget_decision_interval_steps",
+        "motion_decision_interval_steps",
         "render_fps",
     )
     for name in positive_integer_names:
@@ -426,6 +597,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--sensor-capacity must be non-negative")
     if args.sensor_cooldown_steps < 0:
         parser.error("--sensor-cooldown-steps must be non-negative")
+    for name in (
+        "min_actor_decisions",
+        "motion_actor_start_update",
+        "sensor_actor_start_update",
+        "retarget_min_dwell_steps",
+    ):
+        if getattr(args, name) < 0:
+            parser.error(f"--{name.replace('_', '-')} must be non-negative")
 
     finite_names = (
         "learning_rate",
@@ -439,6 +618,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "entropy_coef",
         "entropy_final_coef",
         "target_kl",
+        "kl_hard_multiplier",
         "max_grad_norm",
         "unit_team_reward_weight",
         "placement_log_std_min",
@@ -486,6 +666,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--entropy-final-coef cannot exceed --entropy-coef")
     if args.max_grad_norm <= 0.0 or args.max_speed_mps <= 0.0:
         parser.error("--max-grad-norm and --max-speed-mps must be positive")
+    if args.kl_hard_multiplier <= 1.5:
+        parser.error("--kl-hard-multiplier must be greater than 1.5")
+    if (
+        args.training_phase == "planner_sensor"
+        and args.motion_behavior_mode != "neutral"
+    ):
+        parser.error("--training-phase planner_sensor requires --motion-behavior-mode neutral")
     if args.placement_log_std_min >= args.placement_log_std_max:
         parser.error("--placement-log-std-min must be below --placement-log-std-max")
     if args.run_id is not None and not _RUN_ID.fullmatch(args.run_id):
@@ -662,6 +849,15 @@ def _fresh_policy_config(args: argparse.Namespace, observation_dim: int) -> Join
         entropy_final_coef=args.entropy_final_coef,
         entropy_decay_updates=args.entropy_decay_updates,
         target_kl=args.target_kl,
+        kl_guard_mode=args.kl_guard_mode,
+        min_actor_decisions=args.min_actor_decisions,
+        training_phase=args.training_phase,
+        motion_behavior_mode=args.motion_behavior_mode,
+        motion_curriculum_updates=args.motion_curriculum_updates,
+        post_launch_motion_only=args.post_launch_motion_only,
+        motion_actor_start_update=args.motion_actor_start_update,
+        sensor_actor_start_update=args.sensor_actor_start_update,
+        kl_hard_multiplier=args.kl_hard_multiplier,
         max_grad_norm=args.max_grad_norm,
         update_epochs=args.update_epochs,
         minibatch_size=args.minibatch_size,
@@ -680,7 +876,7 @@ def _checkpoint_config(path: Path) -> Mapping[str, Any]:
         not isinstance(checkpoint, dict)
         or checkpoint.get("algorithm") != JointPPOPolicy.ALGORITHM
         or int(checkpoint.get("schema_version", -1))
-        != JointPPOPolicy.CHECKPOINT_SCHEMA_VERSION
+        not in {3, JointPPOPolicy.CHECKPOINT_SCHEMA_VERSION}
         or not isinstance(checkpoint.get("config"), dict)
     ):
         raise ValueError(f"Not a compatible joint PPO checkpoint: {path}")
@@ -760,6 +956,19 @@ def _game_config(
         sensor_capacity=args.sensor_capacity,
         sensor_max_requests_per_step=args.sensor_max_requests_per_step,
         sensor_cooldown_steps=args.sensor_cooldown_steps,
+        strict_weapon_target_compatibility=(
+            args.strict_weapon_target_compatibility
+        ),
+        allow_low_altitude_search_fallback=(
+            args.allow_low_altitude_search_fallback
+        ),
+        allow_low_altitude_search_replanning=args.allow_low_altitude_search_replanning,
+        retarget_min_dwell_steps=args.retarget_min_dwell_steps,
+        retarget_decision_interval_steps=(
+            args.retarget_decision_interval_steps
+        ),
+        motion_decision_interval_steps=args.motion_decision_interval_steps,
+        post_launch_motion_only=args.post_launch_motion_only,
         official_reward_scale=args.official_reward_scale,
         progress_potential_scale=args.progress_potential_scale,
         planning_team_weight=args.planning_team_weight,
@@ -782,6 +991,9 @@ def _game_config_from_checkpoint_contract(
         observation = contract["observation"]
         sensor = contract["sensor"]
         reward = contract["reward"]
+        control = contract.get("control", {})
+        if not isinstance(control, Mapping):
+            raise TypeError("control contract must be a mapping")
         return JointGameConfig(
             objective_slots=int(space["objective_count"]),
             max_track_age_steps=int(observation["max_track_age_steps"]),
@@ -789,6 +1001,30 @@ def _game_config_from_checkpoint_contract(
             sensor_capacity=int(sensor["coordinated_team_capacity"]),
             sensor_max_requests_per_step=int(sensor["max_requests_per_step"]),
             sensor_cooldown_steps=int(sensor["cooldown_steps"]),
+            # Contracts written before the control-mask extension used the
+            # legacy permissive mask and every-step retarget gate.  Preserve
+            # those exact semantics when resuming such a checkpoint.
+            strict_weapon_target_compatibility=bool(
+                control.get("strict_weapon_target_compatibility", False)
+            ),
+            allow_low_altitude_search_fallback=bool(
+                control.get("allow_low_altitude_search_fallback", True)
+            ),
+            allow_low_altitude_search_replanning=bool(
+                control.get("allow_low_altitude_search_replanning", True)
+            ),
+            retarget_min_dwell_steps=int(
+                control.get("retarget_min_dwell_steps", 0)
+            ),
+            retarget_decision_interval_steps=int(
+                control.get("retarget_decision_interval_steps", 1)
+            ),
+            motion_decision_interval_steps=int(
+                control.get("motion_decision_interval_steps", 1)
+            ),
+            post_launch_motion_only=bool(
+                control.get("post_launch_motion_only", False)
+            ),
             official_reward_scale=float(reward["official_reward_scale"]),
             progress_potential_scale=float(reward["progress_potential_scale"]),
             planning_team_weight=float(reward["planning_team_weight"]),
@@ -1095,6 +1331,10 @@ def _collect_episode(
             if (
                 state.phase == UnitPhase.ACTIVE
                 and 0 <= objective_slot < environment.space.objective_count
+                and environment.assignment_is_damage_compatible(
+                    slot,
+                    objective_slot,
+                )
             ):
                 assignment_duration[slot, objective_slot] += 1
         sensor_reward = (
@@ -1288,7 +1528,7 @@ def _environment_contract(
         reward_contract["sensor_information_source"] = str(
             environment.sensor_information_source
         )
-    return {
+    contract: dict[str, Any] = {
         # Version 3 exactly describes the legacy per-unit satellite runtime.
         # Version 4 records the updated factory-global behavior while retaining
         # the same policy tensor schema and observation dimension.
@@ -1326,6 +1566,38 @@ def _environment_contract(
         "sensor": sensor_contract,
         "reward": reward_contract,
     }
+    if (
+        environment.config.strict_weapon_target_compatibility
+        or environment.config.retarget_min_dwell_steps
+        or environment.config.retarget_decision_interval_steps != 1
+        or not environment.config.allow_low_altitude_search_replanning
+        or environment.config.motion_decision_interval_steps != 1
+        or getattr(environment.config, "post_launch_motion_only", False)
+    ):
+        control_contract = {
+            "strict_weapon_target_compatibility": bool(
+                environment.config.strict_weapon_target_compatibility
+            ),
+            "allow_low_altitude_search_fallback": bool(
+                environment.config.allow_low_altitude_search_fallback
+            ),
+            "retarget_min_dwell_steps": int(
+                environment.config.retarget_min_dwell_steps
+            ),
+            "retarget_decision_interval_steps": int(
+                environment.config.retarget_decision_interval_steps
+            ),
+        }
+        if not environment.config.allow_low_altitude_search_replanning:
+            control_contract["allow_low_altitude_search_replanning"] = False
+        if environment.config.motion_decision_interval_steps != 1:
+            control_contract["motion_decision_interval_steps"] = int(
+                environment.config.motion_decision_interval_steps
+            )
+        if getattr(environment.config, "post_launch_motion_only", False):
+            control_contract["post_launch_motion_only"] = True
+        contract["control"] = control_contract
+    return contract
 
 
 def _save_policy(
@@ -1806,6 +2078,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             policy.config.target_kl,
             policy.config.minibatch_size,
             game_config.sensor_capacity,
+        )
+        LOGGER.info(
+            "Branch training: kl_guard=%s min_actor_decisions=%d "
+            "motion_start_update=%d sensor_start_update=%d kl_hard_multiplier=%.2f",
+            policy.config.kl_guard_mode,
+            policy.config.min_actor_decisions,
+            policy.config.motion_actor_start_update,
+            policy.config.sensor_actor_start_update,
+            policy.config.kl_hard_multiplier,
+        )
+        LOGGER.info(
+            "Control masks: strict_weapon_target=%s low_altitude_search_fallback=%s "
+            "retarget_min_dwell_steps=%d retarget_interval_steps=%d",
+            game_config.strict_weapon_target_compatibility,
+            game_config.allow_low_altitude_search_fallback,
+            game_config.retarget_min_dwell_steps,
+            game_config.retarget_decision_interval_steps,
         )
         LOGGER.info(
             "Sensor backend=%s backend_team_capacity=%d active_minutes=%s "

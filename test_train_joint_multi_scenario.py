@@ -205,6 +205,10 @@ class ParserAndPlacementTests(unittest.TestCase):
             multi.parse_args(
                 ["--gpu-ids", "1", "--trainer-args", "--result-d", "/tmp/escape"]
             )
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            multi.parse_args(
+                ["--gpu-ids", "1", "--trainer-args", "--init-f", "/tmp/escape.pt"]
+            )
 
     def test_non_finite_timeouts_are_rejected(self):
         for option, value in (
@@ -296,6 +300,150 @@ class DryRunAndResumeTests(unittest.TestCase):
             self.assertFalse((launcher_root / "dry_only").exists())
             self.assertFalse((root / "results").exists())
             self.assertFalse((root / "models").exists())
+
+    def test_resume_and_warm_start_modes_are_mutually_exclusive(self):
+        for values in (
+            ["--resume-from", "E01=a.pt", "--init-from", "E01=b.pt"],
+            ["--resume-batch", "old_batch", "--init-from", "E01=b.pt"],
+        ):
+            with self.subTest(values=values), contextlib.redirect_stderr(
+                io.StringIO()
+            ), self.assertRaises(SystemExit):
+                multi.parse_args(["--gpu-ids", "cpu", *values])
+
+    def test_per_case_init_from_uses_weights_only_command_and_records_provenance(self):
+        with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:
+            root = Path(directory)
+            checkpoint = root / "old" / "checkpoints" / "round_0040.pt"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"pre-motion-policy")
+            selected = multi.resolve_explicit_initializations(
+                [f"E01={checkpoint}"], ("E01",), root
+            )
+            with mock.patch.object(multi, "RESULTS_ROOT", root / "results"), mock.patch.object(
+                multi, "MODELS_ROOT", root / "models"
+            ):
+                plan = multi.build_job_plans(
+                    ("E01",), TIMESTAMP, init_froms=selected
+                )[0]
+            args = multi.parse_args(["--gpu-ids", "cpu", "--scenarios", "E01"])
+            slot = multi.build_worker_slots(args)[0]
+            command = multi.trainer_command(args, plan, slot)
+            source = selected["E01"]
+
+            self.assertEqual(source.mode, "init_from")
+            self.assertEqual(source.sha256, multi._sha256_file(checkpoint))
+            self.assertEqual(plan.initialization, "weights_only_warm_start")
+            self.assertIs(plan.checkpoint_source, source)
+            self.assertIsNone(plan.resume)
+            self.assertNotIn("--resume", command)
+            self.assertEqual(
+                command[command.index("--init-from") + 1], str(checkpoint.resolve())
+            )
+            document = multi.batch_plan_document(
+                args,
+                (plan,),
+                (slot,),
+                root / "launcher",
+                created_at="2026-09-13T12:00:00+08:00",
+            )
+            recorded = document["jobs"][0]["checkpoint_source"]
+            self.assertEqual(recorded["mode"], "init_from")
+            self.assertEqual(recorded["path"], str(checkpoint.resolve()))
+            self.assertEqual(recorded["sha256"], source.sha256)
+            self.assertIsNone(document["jobs"][0]["resume"])
+            self.assertEqual(document["jobs"][0]["init_from"], recorded)
+            state = multi._empty_states((plan,))["E01"]
+            self.assertEqual(state["checkpoint_source"], recorded)
+            self.assertEqual(state["init_from"], str(checkpoint.resolve()))
+
+    def test_init_from_dry_run_is_read_only_and_records_source(self):
+        with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:
+            root = Path(directory)
+            checkpoint = root / "source" / "round_0040.pt"
+            checkpoint.parent.mkdir()
+            checkpoint.write_bytes(b"pre-motion")
+            stdout = io.StringIO()
+            with mock.patch.object(multi, "RESULTS_ROOT", root / "results"), mock.patch.object(
+                multi, "MODELS_ROOT", root / "models"
+            ), mock.patch.object(
+                multi, "LAUNCHER_RUNS_ROOT", root / "launcher_runs"
+            ), mock.patch.object(
+                multi, "make_timestamp", return_value=TIMESTAMP
+            ), mock.patch.object(multi.subprocess, "Popen") as popen, contextlib.redirect_stdout(
+                stdout
+            ):
+                return_code = multi.main(
+                    [
+                        "--gpu-ids",
+                        "cpu",
+                        "--scenarios",
+                        "E01",
+                        "--batch-id",
+                        "init_dry",
+                        "--init-from",
+                        f"E01={checkpoint}",
+                        "--dry-run",
+                    ]
+                )
+
+            self.assertEqual(return_code, 0)
+            popen.assert_not_called()
+            self.assertFalse((root / "launcher_runs" / "init_dry").exists())
+            self.assertFalse((root / "results").exists())
+            self.assertFalse((root / "models").exists())
+            source = json.loads(stdout.getvalue())["jobs"][0]["checkpoint_source"]
+            self.assertEqual(source["mode"], "init_from")
+            self.assertEqual(source["path"], str(checkpoint.resolve()))
+            self.assertRegex(source["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_warm_start_hash_change_is_rejected_before_popen(self):
+        with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:
+            root = Path(directory)
+            checkpoint = root / "source" / "round_0040.pt"
+            checkpoint.parent.mkdir()
+            checkpoint.write_bytes(b"original")
+            selected = multi.resolve_explicit_initializations(
+                [f"E01={checkpoint}"], ("E01",), root
+            )
+            with mock.patch.object(multi, "RESULTS_ROOT", root / "results"), mock.patch.object(
+                multi, "MODELS_ROOT", root / "models"
+            ):
+                plans = multi.build_job_plans(
+                    ("E01",), TIMESTAMP, init_froms=selected
+                )
+            checkpoint.write_bytes(b"changed-after-planning")
+            args = multi.parse_args(
+                [
+                    "--rounds",
+                    "1",
+                    "--gpu-ids",
+                    "cpu",
+                    "--scenarios",
+                    "E01",
+                    "--batch-id",
+                    "changed_source",
+                    "--poll-interval",
+                    "0.001",
+                ]
+            )
+            args.batch_id = "changed_source"
+            launcher = root / "launcher_runs" / "changed_source"
+            with mock.patch.object(multi.subprocess, "Popen") as popen, mock.patch.object(
+                multi.time, "sleep", return_value=None
+            ), contextlib.redirect_stdout(io.StringIO()):
+                return_code = multi.run_batch(
+                    args, plans, multi.build_worker_slots(args), launcher
+                )
+
+            self.assertEqual(return_code, 1)
+            popen.assert_not_called()
+            status = json.loads(
+                (launcher / "batch_status.json").read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                "Warm-start checkpoint changed", status["jobs"]["E01"]["error"]
+            )
 
     def test_resume_batch_selects_each_scenarios_latest_checkpoint(self):
         with tempfile.TemporaryDirectory(dir=multi.PERSONAL_ROOT) as directory:

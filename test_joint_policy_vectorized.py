@@ -230,7 +230,12 @@ class VectorizedJointPolicyTests(unittest.TestCase):
                 atol=2e-6,
             )
         self.assertEqual(int(packed.plan_active.sum()), int(plan_active.sum()))
-        self.assertEqual(int(packed.movement_active.sum()), int(motion_active.sum()))
+        self.assertTrue(
+            torch.equal(packed.motion_active, torch.from_numpy(motion_active))
+        )
+        self.assertTrue(
+            torch.equal(packed.motion_value_active, packed.movement_active)
+        )
         self.assertEqual(int(packed.sensor_active.sum()), int(sensor_active.sum()))
         self.assertEqual(term_count, sum(len(item.trace.log_prob_by_term) for item in transitions))
 

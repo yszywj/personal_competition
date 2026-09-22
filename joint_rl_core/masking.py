@@ -83,6 +83,12 @@ def build_joint_action_mask(
     *,
     step: int,
     allow_staged_sensor: bool = False,
+    objective_valid_by_unit: Sequence[Sequence[bool]] | None = None,
+    routine_retarget_allowed_by_unit: Sequence[bool] | None = None,
+    retarget_min_dwell_steps: int = 0,
+    retarget_decision_interval_steps: int = 1,
+    motion_decision_interval_steps: int = 1,
+    post_launch_motion_only: bool = False,
 ) -> JointActionMask:
     """Build masks from lifecycle state without inspecting simulator internals."""
 
@@ -92,6 +98,57 @@ def build_joint_action_mask(
             f"objective_valid must have shape {(space.objective_count,)}, "
             f"got {objective.shape}"
         )
+    if objective_valid_by_unit is None:
+        objectives_by_unit = np.broadcast_to(
+            objective,
+            (space.unit_count, space.objective_count),
+        )
+    else:
+        objectives_by_unit = np.asarray(objective_valid_by_unit, dtype=np.bool_)
+        expected_shape = (space.unit_count, space.objective_count)
+        if objectives_by_unit.shape != expected_shape:
+            raise ValueError(
+                f"objective_valid_by_unit must have shape {expected_shape}, "
+                f"got {objectives_by_unit.shape}"
+            )
+        # Per-unit compatibility can only narrow the global legal-information
+        # mask.  It must never make an unknown/padding objective selectable.
+        objectives_by_unit = np.logical_and(
+            objectives_by_unit,
+            objective[None, :],
+        )
+    if routine_retarget_allowed_by_unit is None:
+        routine_retarget_allowed = np.ones(space.unit_count, dtype=np.bool_)
+    else:
+        routine_retarget_allowed = np.asarray(
+            routine_retarget_allowed_by_unit,
+            dtype=np.bool_,
+        )
+        if routine_retarget_allowed.shape != (space.unit_count,):
+            raise ValueError(
+                "routine_retarget_allowed_by_unit must have shape "
+                f"{(space.unit_count,)}, got {routine_retarget_allowed.shape}"
+            )
+    if (
+        isinstance(retarget_min_dwell_steps, bool)
+        or not isinstance(retarget_min_dwell_steps, int)
+        or retarget_min_dwell_steps < 0
+    ):
+        raise ValueError("retarget_min_dwell_steps must be a non-negative integer")
+    if (
+        isinstance(retarget_decision_interval_steps, bool)
+        or not isinstance(retarget_decision_interval_steps, int)
+        or retarget_decision_interval_steps <= 0
+    ):
+        raise ValueError("retarget_decision_interval_steps must be a positive integer")
+    if (
+        isinstance(motion_decision_interval_steps, bool)
+        or not isinstance(motion_decision_interval_steps, int)
+        or motion_decision_interval_steps <= 0
+    ):
+        raise ValueError("motion_decision_interval_steps must be a positive integer")
+    if not isinstance(post_launch_motion_only, bool):
+        raise ValueError("post_launch_motion_only must be boolean")
 
     by_unit: dict[int, UnitActionMask] = {}
     slots = [state.slot for state in states]
@@ -103,31 +160,103 @@ def build_joint_action_mask(
     for state in states:
         staged = state.phase == UnitPhase.STAGED
         active = state.phase == UnitPhase.ACTIVE
-        selectable_objectives = objective.copy()
+        unit_objectives = np.array(
+            objectives_by_unit[state.slot],
+            dtype=np.bool_,
+            copy=True,
+        )
+        selectable_objectives = unit_objectives.copy()
+        current_objective_valid = False
         if (
             active
             and 0 <= state.current_objective_slot < space.objective_count
         ):
+            current_objective_valid = bool(
+                unit_objectives[state.current_objective_slot]
+            )
             # Changing to the current target is a command with no game effect.
             selectable_objectives[state.current_objective_slot] = False
-        activation = np.asarray((True, staged and bool(objective.any())), dtype=np.bool_)
+        dwell_elapsed = (
+            state.last_objective_change_step is None
+            or step - state.last_objective_change_step >= retarget_min_dwell_steps
+        )
+        retarget_pulse = (
+            state.last_objective_change_step is None
+            or retarget_decision_interval_steps == 1
+            or (
+                step
+                - state.last_objective_change_step
+                - retarget_min_dwell_steps
+            )
+            % retarget_decision_interval_steps
+            == 0
+        )
+        may_retarget = bool(
+            active
+            and selectable_objectives.any()
+            and (
+                not current_objective_valid
+                or (
+                    bool(routine_retarget_allowed[state.slot])
+                    and dwell_elapsed
+                    and retarget_pulse
+                )
+            )
+        )
+        activation = np.asarray(
+            (True, staged and bool(unit_objectives.any())),
+            dtype=np.bool_,
+        )
         retarget = np.asarray(
-            (True, active and bool(selectable_objectives.any())), dtype=np.bool_
+            (True, may_retarget),
+            dtype=np.bool_,
         )
         # A placement and launch are submitted in one simulator transaction.
-        # The first movement command may therefore accompany activation.  When
-        # the parent activation choice is NO the movement branch is inactive
-        # and canonicalization still forces the stable NEUTRAL sentinel.
+        # Only interval=1 permits movement alongside activation unless
+        # post_launch_motion_only is enabled.  With
+        # throttling, staged movement is neutral and an active unit first opens
+        # after one complete interval measured from confirmed activation.
+        # Restored active states without an activation time use global pulses.
+        # An inactive movement branch still canonicalizes to NEUTRAL.
+        motion_reference_step = (
+            0
+            if state.activated_step is None
+            else state.activated_step
+        )
+        motion_age = step - motion_reference_step
+        motion_ready = (
+            motion_age >= 0
+            if state.activated_step is None
+            else motion_age >= motion_decision_interval_steps
+        )
+        motion_pulse = bool(
+            active
+            and (
+                motion_decision_interval_steps == 1
+                or (
+                    motion_ready
+                    and motion_age % motion_decision_interval_steps == 0
+                )
+            )
+        )
+        movement_open = bool(
+            (
+                staged
+                and motion_decision_interval_steps == 1
+                and not post_launch_motion_only
+            )
+            or motion_pulse
+        )
         movement = np.asarray(
-            (staged or active, True, staged or active),
+            (movement_open, True, movement_open),
             dtype=np.bool_,
         )
         by_unit[state.slot] = UnitActionMask(
             activation=activation,
-            objective=(selectable_objectives if active else objective.copy()),
+            objective=(selectable_objectives if active else unit_objectives),
             retarget=retarget,
             movement=movement,
-            placement_possible=staged and bool(objective.any()),
+            placement_possible=staged and bool(unit_objectives.any()),
         )
         sensor_eligible[state.slot] = resource_ready and (
             active or (allow_staged_sensor and staged)
@@ -198,6 +327,12 @@ def validate_joint_action(
     *,
     step: int,
     allow_staged_sensor: bool = False,
+    objective_valid_by_unit: Sequence[Sequence[bool]] | None = None,
+    routine_retarget_allowed_by_unit: Sequence[bool] | None = None,
+    retarget_min_dwell_steps: int = 0,
+    retarget_decision_interval_steps: int = 1,
+    motion_decision_interval_steps: int = 1,
+    post_launch_motion_only: bool = False,
 ) -> JointActionMask:
     """Validate categorical choices and only the continuous branches in use."""
 
@@ -208,6 +343,12 @@ def validate_joint_action(
         sensor_state,
         step=step,
         allow_staged_sensor=allow_staged_sensor,
+        objective_valid_by_unit=objective_valid_by_unit,
+        routine_retarget_allowed_by_unit=routine_retarget_allowed_by_unit,
+        retarget_min_dwell_steps=retarget_min_dwell_steps,
+        retarget_decision_interval_steps=retarget_decision_interval_steps,
+        motion_decision_interval_steps=motion_decision_interval_steps,
+        post_launch_motion_only=post_launch_motion_only,
     )
     validate_action_against_mask(states, action, mask)
     return mask

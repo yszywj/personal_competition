@@ -144,6 +144,10 @@ class JointGameGeometryTests(unittest.TestCase):
 
     def test_objective_loads_follow_active_assignment_retarget_and_terminal_state(self):
         environment = object.__new__(JointGameEnv)
+        environment.config = JointGameConfig(
+            objective_slots=2,
+            strict_weapon_target_compatibility=False,
+        )
         environment.space = JointSpaceSpec(unit_count=5, objective_count=2)
         environment.unit_types = (21000, 21000, 21001, 21002, 21002)
         environment.tracker = JointControlTracker(
@@ -265,9 +269,233 @@ class JointGameGeometryTests(unittest.TestCase):
             {"objective_slots": 2.5},
             {"sensor_capacity": True},
             {"terminate_on_all_objectives_destroyed": 1},
+            {"strict_weapon_target_compatibility": 1},
+            {"allow_low_altitude_search_fallback": 1},
+            {"allow_low_altitude_search_replanning": 1},
+            {"retarget_min_dwell_steps": -1},
+            {"retarget_min_dwell_steps": True},
+            {"retarget_decision_interval_steps": 0},
+            {"retarget_decision_interval_steps": True},
+            {"motion_decision_interval_steps": 0},
+            {"motion_decision_interval_steps": True},
+            {"post_launch_motion_only": 1},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 JointGameConfig(**kwargs)
+
+    def test_weapon_target_compatibility_masks_ineffective_pairings(self):
+        environment = object.__new__(JointGameEnv)
+        environment.config = JointGameConfig(
+            objective_slots=3,
+            retarget_min_dwell_steps=10,
+        )
+        environment.space = JointSpaceSpec(unit_count=3, objective_count=3)
+        environment.unit_types = (21000, 21001, 21002)
+        environment.tracker = JointControlTracker(
+            environment.space,
+            sensor_config=SharedSensorConfig(capacity=0),
+        )
+        environment.sensor_backend = "team_global"
+        environment.engine = SimpleNamespace(
+            simulator_factory=SimpleNamespace(
+                red_sat_use_count=0,
+                red_sat_max_use_count=0,
+                sim_time=0,
+                is_using_satellite=lambda: False,
+            ),
+            sim_time=0,
+        )
+        environment.current_step = 0
+        environment._tracks = [
+            _ObjectiveTrack(
+                slot=0,
+                entity_id=40,
+                known=True,
+                type_index=0,
+                static_public=True,
+            ),
+            _ObjectiveTrack(
+                slot=1,
+                entity_id=41,
+                known=True,
+                type_index=1,
+                static_public=True,
+            ),
+            _ObjectiveTrack(slot=2, entity_id=42, known=True, type_index=2),
+        ]
+        environment._cached_action_mask = None
+        environment._cached_action_mask_step = -1
+
+        mask = environment.action_mask()
+        self.assertEqual(mask.by_unit[0].objective.tolist(), [True, True, False])
+        self.assertEqual(mask.by_unit[1].objective.tolist(), [True, True, False])
+        self.assertEqual(mask.by_unit[2].objective.tolist(), [False, False, True])
+        self.assertEqual(mask.by_unit[0].movement.tolist(), [True, True, True])
+        environment.config = JointGameConfig(
+            objective_slots=3,
+            retarget_min_dwell_steps=10,
+            motion_decision_interval_steps=1,
+            post_launch_motion_only=True,
+        )
+        environment._cached_action_mask = None
+        launch_only = environment.action_mask()
+        self.assertEqual(
+            launch_only.by_unit[0].movement.tolist(), [False, True, False]
+        )
+        environment.config = JointGameConfig(
+            objective_slots=3,
+            retarget_min_dwell_steps=10,
+        )
+        environment._cached_action_mask = None
+        self.assertTrue(environment.assignment_is_damage_compatible(0, 0))
+        self.assertFalse(environment.assignment_is_damage_compatible(0, 2))
+        self.assertFalse(environment.assignment_is_damage_compatible(2, 0))
+        self.assertTrue(environment.assignment_is_damage_compatible(2, 2))
+
+        environment.current_step = 301
+        environment._cached_action_mask = None
+        stale_ship = environment.action_mask()
+        self.assertEqual(
+            stale_ship.by_unit[2].objective.tolist(),
+            [True, True, False],
+        )
+
+        # Before a ship is legally known, land objectives are explicit search
+        # anchors so L missiles can become airborne and discover it locally.
+        environment._tracks[2].known = False
+        environment.current_step = 302
+        environment._cached_action_mask = None
+        no_ship = environment.action_mask()
+        self.assertEqual(no_ship.by_unit[2].activation.tolist(), [True, True])
+        self.assertEqual(no_ship.by_unit[2].objective.tolist(), [True, True, False])
+
+        environment.config = JointGameConfig(
+            objective_slots=3,
+            allow_low_altitude_search_fallback=False,
+        )
+        environment.current_step = 303
+        environment._cached_action_mask = None
+        strict_wait = environment.action_mask()
+        self.assertEqual(strict_wait.by_unit[2].activation.tolist(), [True, False])
+        self.assertEqual(
+            strict_wait.by_unit[2].objective.tolist(),
+            [False, False, False],
+        )
+
+        # Re-enable search fallback and launch L against a land search anchor.
+        # A throttled movement branch is neutral at launch and between pulses.
+        environment.config = JointGameConfig(
+            objective_slots=3,
+            retarget_min_dwell_steps=10,
+            motion_decision_interval_steps=10,
+        )
+        environment.current_step = 304
+        environment._cached_action_mask = None
+        activation = JointAction.from_sequence(
+            (
+                UnitAction.noop(0),
+                UnitAction.noop(1),
+                UnitAction(
+                    slot=2,
+                    activate=BinaryChoice.YES,
+                    objective_slot=0,
+                ),
+            )
+        )
+        environment.tracker.apply(
+            activation,
+            environment._objective_validity(),
+            step=304,
+        )
+        environment.tracker.confirm_activations(
+            (ActivationReceipt(slot=2, request_step=304, accepted=True),),
+            step=304,
+        )
+        environment._cached_action_mask = None
+        launch_step = environment.action_mask()
+        self.assertEqual(
+            launch_step.by_unit[2].movement.tolist(),
+            [False, True, False],
+        )
+
+        environment.current_step = 313
+        environment._cached_action_mask = None
+        before_pulse = environment.action_mask()
+        self.assertEqual(
+            before_pulse.by_unit[2].movement.tolist(),
+            [False, True, False],
+        )
+
+        # Routine land-to-land replanning is locked even after dwell elapses.
+        environment.current_step = 314
+        environment._cached_action_mask = None
+        locked_search = environment.action_mask()
+        self.assertEqual(
+            locked_search.by_unit[2].objective.tolist(),
+            [False, True, False],
+        )
+        self.assertEqual(
+            locked_search.by_unit[2].retarget.tolist(),
+            [True, False],
+        )
+        self.assertEqual(
+            locked_search.by_unit[2].movement.tolist(),
+            [True, True, True],
+        )
+
+        # The compatibility escape hatch restores routine replanning.
+        environment.config = JointGameConfig(
+            objective_slots=3,
+            allow_low_altitude_search_replanning=True,
+            retarget_min_dwell_steps=10,
+            motion_decision_interval_steps=10,
+        )
+        environment.current_step = 315
+        environment._cached_action_mask = None
+        replanning = environment.action_mask()
+        self.assertEqual(replanning.by_unit[2].retarget.tolist(), [True, True])
+        self.assertEqual(
+            replanning.by_unit[2].movement.tolist(),
+            [False, True, False],
+        )
+
+        # A newly known ship invalidates the search anchor and bypasses both
+        # the routine lock and dwell, so mission retargeting opens immediately.
+        environment.config = JointGameConfig(
+            objective_slots=3,
+            retarget_min_dwell_steps=100,
+            motion_decision_interval_steps=10,
+        )
+        environment._tracks[2].known = True
+        environment._tracks[2].last_seen_step = 315
+        environment._cached_action_mask = None
+        fresh_ship = environment.action_mask()
+        self.assertEqual(
+            fresh_ship.by_unit[2].objective.tolist(),
+            [False, False, True],
+        )
+        self.assertEqual(fresh_ship.by_unit[2].retarget.tolist(), [True, True])
+        self.assertEqual(
+            fresh_ship.by_unit[2].movement.tolist(),
+            [False, True, False],
+        )
+
+    def test_compatibility_filter_can_be_disabled_explicitly(self):
+        environment = object.__new__(JointGameEnv)
+        environment.config = JointGameConfig(
+            objective_slots=2,
+            strict_weapon_target_compatibility=False,
+        )
+        environment.unit_types = (21002,)
+        environment._tracks = [
+            _ObjectiveTrack(slot=0, entity_id=40, known=True, type_index=0),
+            _ObjectiveTrack(slot=1, entity_id=41, known=True, type_index=1),
+        ]
+        self.assertEqual(
+            environment._objective_validity_by_unit(),
+            ((True, True),),
+        )
+        self.assertTrue(environment.assignment_is_damage_compatible(0, 0))
 
     def test_sensor_information_reward_closes_only_on_true_terminal(self):
         environment = object.__new__(JointGameEnv)
@@ -313,7 +541,12 @@ class JointGameGeometryTests(unittest.TestCase):
                 return self.sim_time < self.end_time
 
         environment = object.__new__(JointGameEnv)
+        environment.config = JointGameConfig(
+            objective_slots=1,
+            strict_weapon_target_compatibility=False,
+        )
         environment.space = JointSpaceSpec(unit_count=2, objective_count=1)
+        environment.unit_types = (21000, 21000)
         environment.tracker = JointControlTracker(
             environment.space,
             sensor_config=SharedSensorConfig(
@@ -386,7 +619,12 @@ class JointGameGeometryTests(unittest.TestCase):
                 return False
 
         environment = object.__new__(JointGameEnv)
+        environment.config = JointGameConfig(
+            objective_slots=1,
+            strict_weapon_target_compatibility=False,
+        )
         environment.space = JointSpaceSpec(unit_count=2, objective_count=1)
+        environment.unit_types = (21000, 21000)
         environment.tracker = JointControlTracker(
             environment.space,
             sensor_config=SharedSensorConfig(capacity=100),
@@ -490,7 +728,13 @@ class JointGameGeometryTests(unittest.TestCase):
             renderer=None,
         )
         environment._tracks = [
-            _ObjectiveTrack(slot=0, entity_id=51, known=True, position=(1.0, 1.0))
+            _ObjectiveTrack(
+                slot=0,
+                entity_id=51,
+                known=True,
+                position=(1.0, 1.0),
+                type_index=0,
+            )
         ]
         environment._deployment_bounds = {21000: (0.0, 1.0, 0.0, 1.0)}
         environment._last_raw_observation = raw

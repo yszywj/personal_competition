@@ -36,6 +36,7 @@ from personal_train.joint_rl_core import (
     build_joint_action_mask,
     expected_log_prob_terms,
     validate_joint_action,
+    validate_action_against_mask,
 )
 
 
@@ -332,6 +333,317 @@ class LifecycleAndMaskTests(unittest.TestCase):
         )
         self.assertEqual(mask.by_unit[0].objective.tolist(), [False, False, True])
         self.assertEqual(mask.by_unit[0].retarget.tolist(), [True, True])
+
+    def test_per_unit_objective_masks_and_retarget_dwell_are_conditional(self):
+        activation = _joint_action(
+            UnitAction(slot=0, activate=BinaryChoice.YES, objective_slot=0),
+            UnitAction.noop(1),
+            UnitAction.noop(2),
+        )
+        self.tracker.apply(activation, self.objectives, step=0)
+        self.tracker.confirm_activations(
+            (ActivationReceipt(slot=0, request_step=0, accepted=True),),
+            step=0,
+        )
+        per_unit = (
+            (True, False, True),
+            (False, False, False),
+            (False, True, False),
+        )
+        dwelling = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            (True, True, True),
+            self.tracker.sensor_state,
+            step=4,
+            objective_valid_by_unit=per_unit,
+            retarget_min_dwell_steps=5,
+            retarget_decision_interval_steps=5,
+        )
+        self.assertEqual(dwelling.by_unit[0].objective.tolist(), [False, False, True])
+        self.assertEqual(dwelling.by_unit[0].retarget.tolist(), [True, False])
+        self.assertEqual(dwelling.by_unit[1].activation.tolist(), [True, False])
+        self.assertEqual(dwelling.by_unit[1].objective.tolist(), [False, False, False])
+        self.assertEqual(dwelling.by_unit[2].activation.tolist(), [True, True])
+
+        elapsed = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            (True, True, True),
+            self.tracker.sensor_state,
+            step=5,
+            objective_valid_by_unit=per_unit,
+            retarget_min_dwell_steps=5,
+            retarget_decision_interval_steps=5,
+        )
+        self.assertEqual(elapsed.by_unit[0].retarget.tolist(), [True, True])
+        routine_locked = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            (True, True, True),
+            self.tracker.sensor_state,
+            step=5,
+            objective_valid_by_unit=per_unit,
+            routine_retarget_allowed_by_unit=(False, True, True),
+            retarget_min_dwell_steps=5,
+            retarget_decision_interval_steps=5,
+        )
+        self.assertEqual(
+            routine_locked.by_unit[0].retarget.tolist(), [True, False]
+        )
+
+
+        between_pulses = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            (True, True, True),
+            self.tracker.sensor_state,
+            step=6,
+            objective_valid_by_unit=per_unit,
+            retarget_min_dwell_steps=5,
+            retarget_decision_interval_steps=5,
+        )
+        self.assertEqual(
+            between_pulses.by_unit[0].retarget.tolist(), [True, False]
+        )
+
+        next_pulse = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            (True, True, True),
+            self.tracker.sensor_state,
+            step=10,
+            objective_valid_by_unit=per_unit,
+            retarget_min_dwell_steps=5,
+            retarget_decision_interval_steps=5,
+        )
+        self.assertEqual(next_pulse.by_unit[0].retarget.tolist(), [True, True])
+
+        # If the current assignment becomes invalid, the dwell cannot trap the
+        # unit on it when a valid alternative exists.
+        invalid_current = (
+            (False, False, True),
+            per_unit[1],
+            per_unit[2],
+        )
+        bypassed = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            (True, True, True),
+            self.tracker.sensor_state,
+            step=1,
+            objective_valid_by_unit=invalid_current,
+            routine_retarget_allowed_by_unit=(False, True, True),
+            retarget_min_dwell_steps=5,
+            retarget_decision_interval_steps=5,
+        )
+        self.assertEqual(bypassed.by_unit[0].retarget.tolist(), [True, True])
+
+    def test_motion_interval_uses_activation_relative_single_step_pulses(self):
+        staged = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            self.objectives,
+            self.tracker.sensor_state,
+            step=0,
+            motion_decision_interval_steps=5,
+        )
+        for unit_mask in staged.by_unit.values():
+            self.assertEqual(unit_mask.movement.tolist(), [False, True, False])
+
+        activation = _joint_action(
+            UnitAction(
+                slot=0,
+                activate=BinaryChoice.YES,
+                objective_slot=0,
+                movement=Movement.NEUTRAL,
+            ),
+            UnitAction.noop(1),
+            UnitAction.noop(2),
+        )
+        self.tracker.apply(activation, self.objectives, step=0)
+        self.tracker.confirm_activations(
+            (ActivationReceipt(slot=0, request_step=0, accepted=True),),
+            step=0,
+        )
+
+        expected_by_step = {
+            0: [False, True, False],
+            4: [False, True, False],
+            5: [True, True, True],
+            6: [False, True, False],
+        }
+        for step, expected in expected_by_step.items():
+            with self.subTest(step=step):
+                mask = build_joint_action_mask(
+                    self.space,
+                    self.tracker.states,
+                    self.objectives,
+                    self.tracker.sensor_state,
+                    step=step,
+                    motion_decision_interval_steps=5,
+                )
+                self.assertEqual(mask.by_unit[0].movement.tolist(), expected)
+
+        legacy = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            self.objectives,
+            self.tracker.sensor_state,
+            step=1,
+            motion_decision_interval_steps=1,
+        )
+        self.assertEqual(legacy.by_unit[0].movement.tolist(), [True, True, True])
+
+    def test_post_launch_motion_only_opens_after_confirmed_activation(self):
+        staged = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            self.objectives,
+            self.tracker.sensor_state,
+            step=0,
+            motion_decision_interval_steps=1,
+            post_launch_motion_only=True,
+        )
+        self.assertEqual(staged.by_unit[0].movement.tolist(), [False, True, False])
+        launch = _joint_action(
+            UnitAction(
+                slot=0,
+                activate=BinaryChoice.YES,
+                objective_slot=0,
+                movement=Movement.NEUTRAL,
+            ),
+            UnitAction.noop(1),
+            UnitAction.noop(2),
+        )
+        validate_action_against_mask(self.tracker.states, launch, staged)
+        illegal_launch = _joint_action(
+            UnitAction(
+                slot=0,
+                activate=BinaryChoice.YES,
+                objective_slot=0,
+                movement=Movement.POSITIVE,
+            ),
+            UnitAction.noop(1),
+            UnitAction.noop(2),
+        )
+        with self.assertRaises(ActionValidationError):
+            validate_action_against_mask(self.tracker.states, illegal_launch, staged)
+        self.tracker.apply(launch, self.objectives, step=0)
+        pending = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            self.objectives,
+            self.tracker.sensor_state,
+            step=0,
+            post_launch_motion_only=True,
+        )
+        self.assertEqual(pending.by_unit[0].movement.tolist(), [False, True, False])
+        self.tracker.confirm_activations(
+            (ActivationReceipt(slot=0, request_step=0, accepted=True),),
+            step=0,
+        )
+        for step in (0, 1, 2):
+            with self.subTest(step=step):
+                active = build_joint_action_mask(
+                    self.space,
+                    self.tracker.states,
+                    self.objectives,
+                    self.tracker.sensor_state,
+                    step=step,
+                    motion_decision_interval_steps=1,
+                    post_launch_motion_only=True,
+                )
+                self.assertEqual(active.by_unit[0].movement.tolist(), [True, True, True])
+
+    def test_per_unit_objective_mask_shape_and_dwell_validation(self):
+        narrowed = build_joint_action_mask(
+            self.space,
+            self.tracker.states,
+            (True, False, True),
+            self.tracker.sensor_state,
+            step=0,
+            objective_valid_by_unit=(
+                (True, True, True),
+                (True, True, True),
+                (True, True, True),
+            ),
+        )
+        for unit_mask in narrowed.by_unit.values():
+            self.assertFalse(bool(unit_mask.objective[1]))
+
+        with self.assertRaisesRegex(ValueError, "objective_valid_by_unit"):
+            build_joint_action_mask(
+                self.space,
+                self.tracker.states,
+                self.objectives,
+                self.tracker.sensor_state,
+                step=0,
+                objective_valid_by_unit=((True, False, True),),
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "routine_retarget_allowed_by_unit",
+        ):
+            build_joint_action_mask(
+                self.space,
+                self.tracker.states,
+                self.objectives,
+                self.tracker.sensor_state,
+                step=0,
+                routine_retarget_allowed_by_unit=(True,),
+            )
+
+        for value in (-1, True, 1.5):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError,
+                "retarget_min_dwell_steps",
+            ):
+                build_joint_action_mask(
+                    self.space,
+                    self.tracker.states,
+                    self.objectives,
+                    self.tracker.sensor_state,
+                    step=0,
+                    retarget_min_dwell_steps=value,
+                )
+        for value in (0, -1, True, 1.5):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError,
+                "retarget_decision_interval_steps",
+            ):
+                build_joint_action_mask(
+                    self.space,
+                    self.tracker.states,
+                    self.objectives,
+                    self.tracker.sensor_state,
+                    step=0,
+                    retarget_decision_interval_steps=value,
+                )
+
+        for value in (0, -1, True, 1.5):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError,
+                "motion_decision_interval_steps",
+            ):
+                build_joint_action_mask(
+                    self.space,
+                    self.tracker.states,
+                    self.objectives,
+                    self.tracker.sensor_state,
+                    step=0,
+                    motion_decision_interval_steps=value,
+                )
+
+        with self.assertRaisesRegex(ValueError, "post_launch_motion_only"):
+            build_joint_action_mask(
+                self.space,
+                self.tracker.states,
+                self.objectives,
+                self.tracker.sensor_state,
+                step=0,
+                post_launch_motion_only=1,
+            )
 
     def test_invalid_objective_duplicate_requests_and_unconfirmed_control_fail(self):
         invalid_objective = _joint_action(

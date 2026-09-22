@@ -60,6 +60,36 @@ class JointPPOConfig:
     entropy_final_coef: float = 0.0002
     entropy_decay_updates: int = 500
     target_kl: float = 0.01
+    # ``rollout_branch`` is the reliable branch-wise guard used by new runs.
+    # ``legacy_minibatch_max`` exists only so an older schema-3 checkpoint can
+    # resume with the exact early-stop semantics under which it was created.
+    kl_guard_mode: str = "rollout_branch"
+    # A branch actor is updated only when its complete rollout has at least
+    # this many effective decisions.  Planning uses Kish's effective sample
+    # size under the episode-balancing weights; motion and sensor decisions
+    # are unweighted, so their effective size is their decision count.
+    min_actor_decisions: int = 0
+    # Coarse scripted-behavior curriculum.  Update indices are zero based: a
+    # value of one forces motion=NEUTRAL / sensor=STOP during the first rollout
+    # and omits that branch's surrogate/entropy, while its critic continues.
+    # The shared encoder may still move through other losses, but it cannot
+    # perturb the forced behavior before the branch joins.
+    motion_actor_start_update: int = 0
+    sensor_actor_start_update: int = 0
+    # Phase ownership is fixed for one optimizer lifetime.  Motion behavior is
+    # explicit so rollout collection and PPO evaluation always use the same
+    # distribution, independent of module train/eval mode.
+    training_phase: str = "joint"
+    motion_behavior_mode: str = "curriculum"
+    motion_curriculum_updates: int = 1
+    # In a post-launch-only motion phase, the launch-conditional head belongs
+    # to the frozen planner; only ACTIVE-unit movement and the motion critic
+    # are updated.
+    post_launch_motion_only: bool = False
+    # Epoch-level, full-rollout KL above 1.5 * target_kl freezes only the
+    # offending actor branch.  Only this larger threshold stops the complete
+    # PPO update, including the critics and otherwise healthy actor branches.
+    kl_hard_multiplier: float = 3.0
     max_grad_norm: float = 0.5
     update_epochs: int = 4
     minibatch_size: int = 128
@@ -168,6 +198,9 @@ class _PackedPolicyRollout:
     objective_active: Tensor
     retarget_active: Tensor
     movement_active: Tensor
+    motion_value_active: Tensor
+    motion_active: Tensor
+    plan_value_active: Tensor
     plan_active: Tensor
     sensor_active: Tensor
     sensor_draw_tokens: Tensor
@@ -258,6 +291,11 @@ class JointActorCritic(nn.Module):
         self.placement_log_std_head = nn.Linear(hidden_dim, 2)
         self.initial_movement_head = nn.Linear(hidden_dim, 3)
         self.retarget_head = nn.Linear(hidden_dim, 2)
+        self.motion_adapter = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
         self.movement_head = nn.Linear(hidden_dim, 3)
 
         # The same slot scorer is applied to every entity.  Eligibility and
@@ -301,6 +339,8 @@ class JointActorCritic(nn.Module):
             self.movement_head.bias[Movement.NEUTRAL] = 1.0
             self.initial_movement_head.bias.zero_()
             self.initial_movement_head.bias[Movement.NEUTRAL] = 1.0
+            self.motion_adapter[-1].weight.zero_()
+            self.motion_adapter[-1].bias.zero_()
             self.placement_log_std_head.bias.fill_(-0.5)
             # STOP competes against every eligible slot, so it needs a larger
             # prior than a binary head.  At equal slot logits this gives about
@@ -329,7 +369,9 @@ class JointActorCritic(nn.Module):
         return (
             self.placement_mean_head(conditioned),
             log_std,
-            self.initial_movement_head(conditioned),
+            self.initial_movement_head(
+                conditioned + self.motion_adapter(conditioned)
+            ),
         )
 
     def forward(self, observations: Tensor) -> JointNetworkOutput:
@@ -340,6 +382,7 @@ class JointActorCritic(nn.Module):
         expanded_context = context.unsqueeze(1).expand(-1, features.shape[1], -1)
         entity_and_team = torch.cat((features, expanded_context), dim=-1)
         actor_features = self.joint_actor_encoder(entity_and_team)
+        motion_features = actor_features + self.motion_adapter(actor_features)
         slot_logits = self.sensor_slot_head(entity_and_team).squeeze(-1)
         stop_logit = self.sensor_stop_head(context)
         return JointNetworkOutput(
@@ -347,7 +390,7 @@ class JointActorCritic(nn.Module):
             activation_logits=self.activation_head(actor_features),
             objective_logits=self.objective_head(actor_features),
             retarget_logits=self.retarget_head(actor_features),
-            movement_logits=self.movement_head(actor_features),
+            movement_logits=self.movement_head(motion_features),
             sensor_logits=torch.cat((stop_logit, slot_logits), dim=-1),
             plan_values_by_unit=self.plan_critic(entity_and_team).squeeze(-1),
             motion_values_by_unit=self.motion_critic(entity_and_team).squeeze(-1),
@@ -407,6 +450,68 @@ def _batched_masked_categorical(logits: Tensor, mask: Tensor) -> Categorical:
     )
 
 
+def _validate_motion_fraction(value: float) -> float:
+    fraction = float(value)
+    if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        raise ValueError("motion learned fraction must be finite and in [0, 1]")
+    return fraction
+
+
+def _masked_motion_categorical(
+    logits: Tensor,
+    raw_mask: np.ndarray | Sequence[bool],
+    learned_fraction: float,
+) -> Categorical:
+    """Mix the learned movement policy with deterministic NEUTRAL behavior."""
+
+    fraction = _validate_motion_fraction(learned_fraction)
+    learned = _masked_categorical(logits, raw_mask)
+    mask = torch.as_tensor(
+        np.array(raw_mask, dtype=np.bool_, copy=True),
+        dtype=torch.bool,
+        device=logits.device,
+    )
+    neutral = int(Movement.NEUTRAL)
+    if not bool(mask[neutral].item()):
+        raise ValueError("motion behavior mixture requires NEUTRAL to be legal")
+    probs = learned.probs * fraction
+    probs = probs.clone()
+    probs[neutral] += 1.0 - fraction
+    return Categorical(probs=probs)
+
+
+def _batched_masked_motion_categorical(
+    logits: Tensor,
+    mask: Tensor,
+    learned_fraction: float,
+) -> Categorical:
+    """Batched learned/NEUTRAL behavior distribution."""
+
+    fraction = _validate_motion_fraction(learned_fraction)
+    learned = _batched_masked_categorical(logits, mask)
+    neutral = int(Movement.NEUTRAL)
+    if not bool(mask[..., neutral].all().item()):
+        raise ValueError("motion behavior mixture requires NEUTRAL to be legal")
+    probs = learned.probs * fraction
+    neutral_mass = torch.zeros_like(probs)
+    neutral_mass[..., neutral] = 1.0 - fraction
+    return Categorical(probs=probs + neutral_mass)
+
+
+def _batched_masked_motion_statistics(
+    logits: Tensor,
+    mask: Tensor,
+    selected: Tensor,
+    learned_fraction: float,
+) -> tuple[Tensor, Tensor]:
+    if selected.shape != logits.shape[:-1]:
+        raise ValueError("batched movement actions have the wrong shape")
+    distribution = _batched_masked_motion_categorical(
+        logits, mask, learned_fraction
+    )
+    return distribution.log_prob(selected), distribution.entropy()
+
+
 def _batched_masked_categorical_statistics(
     logits: Tensor,
     mask: Tensor,
@@ -450,7 +555,7 @@ class JointPPOPolicy:
     """
 
     ALGORITHM = "personal_joint_masked_ppo"
-    CHECKPOINT_SCHEMA_VERSION = 3
+    CHECKPOINT_SCHEMA_VERSION = 4
 
     def __init__(self, space: JointSpaceSpec, config: JointPPOConfig) -> None:
         self.space = space
@@ -471,8 +576,9 @@ class JointPPOPolicy:
             placement_log_std_min=config.placement_log_std_min,
             placement_log_std_max=config.placement_log_std_max,
         ).to(self.device)
+        self._configure_trainable_parameters()
         self.optimizer = torch.optim.Adam(
-            self.network.parameters(), lr=config.learning_rate
+            self._trainable_parameters, lr=config.learning_rate
         )
         self.training = True
         self.update_count = 0
@@ -490,10 +596,19 @@ class JointPPOPolicy:
             "update_epochs",
             "minibatch_size",
             "value_inference_batch_size",
+            "motion_curriculum_updates",
         ):
             value = getattr(config, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        for name in (
+            "min_actor_decisions",
+            "motion_actor_start_update",
+            "sensor_actor_start_update",
+        ):
+            value = getattr(config, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
         if not all(
             math.isfinite(value) and value > 0.0
             for value in (config.learning_rate, config.learning_rate_final)
@@ -524,6 +639,38 @@ class JointPPOPolicy:
             raise ValueError("final entropy coefficient cannot exceed its initial value")
         if not math.isfinite(config.max_grad_norm) or config.max_grad_norm <= 0.0:
             raise ValueError("max_grad_norm must be positive")
+        if (
+            not math.isfinite(config.kl_hard_multiplier)
+            or config.kl_hard_multiplier <= 1.5
+        ):
+            raise ValueError("kl_hard_multiplier must be finite and greater than 1.5")
+        if config.kl_guard_mode not in {
+            "rollout_branch",
+            "legacy_minibatch_max",
+        }:
+            raise ValueError(
+                "kl_guard_mode must be rollout_branch or legacy_minibatch_max"
+            )
+        if config.training_phase not in {
+            "joint",
+            "planner_sensor",
+            "motion_only",
+        }:
+            raise ValueError(
+                "training_phase must be joint, planner_sensor, or motion_only"
+            )
+        if config.motion_behavior_mode not in {
+            "neutral",
+            "curriculum",
+            "learned",
+        }:
+            raise ValueError(
+                "motion_behavior_mode must be neutral, curriculum, or learned"
+            )
+        if config.training_phase == "planner_sensor" and config.motion_behavior_mode != "neutral":
+            raise ValueError("planner_sensor training requires neutral motion behavior")
+        if not isinstance(config.post_launch_motion_only, bool):
+            raise ValueError("post_launch_motion_only must be boolean")
         if not (
             math.isfinite(config.placement_log_std_min)
             and math.isfinite(config.placement_log_std_max)
@@ -532,6 +679,69 @@ class JointPPOPolicy:
             raise ValueError("placement log-std bounds are invalid")
         if isinstance(config.seed, bool) or not isinstance(config.seed, int):
             raise ValueError("seed must be an integer")
+
+    def _configure_trainable_parameters(self) -> None:
+        """Freeze phase-external parameters before constructing the optimizer."""
+
+        phase = self.config.training_phase
+        planner_sensor_prefixes = (
+            "entity_encoder.",
+            "joint_actor_encoder.",
+            "activation_head.",
+            "objective_head.",
+            "objective_embedding.",
+            "target_condition_encoder.",
+            "placement_mean_head.",
+            "placement_log_std_head.",
+            "retarget_head.",
+            "sensor_slot_head.",
+            "sensor_stop_head.",
+            "plan_critic.",
+            "sensor_critic.",
+        )
+        motion_prefixes = (
+            "motion_adapter.",
+            "movement_head.",
+            "motion_critic.",
+        )
+        if not self.config.post_launch_motion_only:
+            motion_prefixes += ("initial_movement_head.",)
+
+        def trainable(name: str) -> bool:
+            if phase == "joint":
+                return True
+            prefixes = (
+                planner_sensor_prefixes
+                if phase == "planner_sensor"
+                else motion_prefixes
+            )
+            return name.startswith(prefixes)
+
+        for name, parameter in self.network.named_parameters():
+            parameter.requires_grad_(trainable(name))
+        self._trainable_parameters = tuple(
+            parameter
+            for parameter in self.network.parameters()
+            if parameter.requires_grad
+        )
+        if not self._trainable_parameters:
+            raise ValueError("training phase selected no trainable parameters")
+
+    def motion_learned_fraction(self) -> float:
+        """Return the explicit rollout/evaluation motion behavior mixture."""
+
+        mode = self.config.motion_behavior_mode
+        if mode == "neutral":
+            return 0.0
+        if mode == "learned":
+            return 1.0
+        if self.update_count < self.config.motion_actor_start_update:
+            return 0.0
+        elapsed = self.update_count - self.config.motion_actor_start_update + 1
+        return min(
+            float(elapsed) / float(self.config.motion_curriculum_updates),
+            1.0,
+        )
 
     def _observation_tensor(self, observations: Sequence[np.ndarray]) -> Tensor:
         if len(observations) != self.space.unit_count:
@@ -587,6 +797,7 @@ class JointPPOPolicy:
                 ordered_states,
                 mask,
                 deterministic=deterministic,
+                motion_learned_fraction=self.motion_learned_fraction(),
             )
             values = torch.cat(
                 (
@@ -606,6 +817,11 @@ class JointPPOPolicy:
                 output.sensor_logits,
                 mask,
                 deterministic=deterministic,
+                force_stop=(
+                    self.training
+                    and self.update_count
+                    < self.config.sensor_actor_start_update
+                ),
             )
             if sensor_trace is not None:
                 log_probs["shared_sensor"] = sensor_log_prob
@@ -634,6 +850,7 @@ class JointPPOPolicy:
         mask: JointActionMask,
         *,
         deterministic: bool,
+        motion_learned_fraction: float,
     ) -> tuple[list[UnitAction], dict[str, float]]:
         """Sample every unit branch in a handful of batched device operations.
 
@@ -746,9 +963,10 @@ class JointPPOPolicy:
         movement_active = active | activation_yes
         movement_slots = torch.nonzero(movement_active, as_tuple=False).squeeze(-1)
         if movement_slots.numel():
-            distribution = _batched_masked_categorical(
+            distribution = _batched_masked_motion_categorical(
                 conditioned_movement_logits.index_select(0, movement_slots),
                 categorical_masks["movement"].index_select(0, movement_slots),
+                motion_learned_fraction,
             )
             selected = self._draw(distribution, deterministic)
             movement_actions.index_copy_(0, movement_slots, selected)
@@ -821,6 +1039,7 @@ class JointPPOPolicy:
         mask: JointActionMask,
         *,
         deterministic: bool,
+        force_stop: bool = False,
     ) -> tuple[SharedSensorAction, SharedSensorPolicyTrace | None, float]:
         maximum = mask.shared_sensor_max_requests
         if maximum <= 0:
@@ -833,7 +1052,11 @@ class JointPPOPolicy:
         while True:
             draw_mask = np.concatenate((np.asarray((True,), dtype=np.bool_), available))
             distribution = _masked_categorical(logits, draw_mask)
-            token_tensor = self._draw(distribution, deterministic)
+            token_tensor = (
+                torch.zeros((), dtype=torch.long, device=logits.device)
+                if force_stop
+                else self._draw(distribution, deterministic)
+            )
             token = int(token_tensor.item())
             tokens.append(token)
             masks.append(draw_mask.copy())
@@ -885,6 +1108,7 @@ class JointPPOPolicy:
         shared_sensor_trace: SharedSensorPolicyTrace | None,
     ) -> JointPolicyEvaluation:
         validate_action_against_mask(states, action, mask)
+        motion_learned_fraction = self.motion_learned_fraction()
         actions = {item.slot: item for item in action.units}
         log_probs: dict[str, Tensor] = {}
         entropies: dict[str, Tensor] = {}
@@ -953,8 +1177,10 @@ class JointPPOPolicy:
                     )
                 else:
                     movement_logits = output.movement_logits[slot]
-                distribution = _masked_categorical(
-                    movement_logits, unit_mask.movement
+                distribution = _masked_motion_categorical(
+                    movement_logits,
+                    unit_mask.movement,
+                    motion_learned_fraction,
                 )
                 selected = torch.as_tensor(
                     int(item.movement), dtype=torch.long, device=self.device
@@ -1026,6 +1252,9 @@ class JointPPOPolicy:
         objective_active = np.zeros(action_shape, dtype=np.bool_)
         retarget_active = np.zeros(action_shape, dtype=np.bool_)
         movement_active = np.zeros(action_shape, dtype=np.bool_)
+        motion_value_active = np.zeros(action_shape, dtype=np.bool_)
+        motion_active = np.zeros(action_shape, dtype=np.bool_)
+        plan_value_active = np.zeros(action_shape, dtype=np.bool_)
         plan_active = np.zeros(action_shape, dtype=np.bool_)
         sensor_active = np.zeros(transition_count, dtype=np.bool_)
         old_plan_log_probs = np.zeros(action_shape, dtype=np.float32)
@@ -1085,8 +1314,35 @@ class JointPPOPolicy:
                 objective_active[step_index, slot] = activity.objective
                 retarget_active[step_index, slot] = activity.retarget
                 movement_active[step_index, slot] = activity.movement
-                plan_active[step_index, slot] = any(
+                motion_value_active[step_index, slot] = activity.movement
+                motion_active[step_index, slot] = bool(
+                    activity.movement and int(unit_mask.movement.sum()) > 1
+                )
+                plan_value_active[step_index, slot] = any(
                     bool(getattr(activity, name)) for name in planning_names
+                )
+                # A categorical branch with one legal choice has log-prob 0,
+                # zero entropy and no actor gradient.  Do not count forced
+                # WAIT/KEEP decisions toward planning N_eff or KL; retain them
+                # separately as valid critic samples.
+                plan_active[step_index, slot] = bool(
+                    plan_value_active[step_index, slot]
+                    if self.config.kl_guard_mode == "legacy_minibatch_max"
+                    else (
+                        activity.placement
+                        or (
+                            activity.activation
+                            and int(unit_mask.activation.sum()) > 1
+                        )
+                        or (
+                            activity.objective
+                            and int(unit_mask.objective.sum()) > 1
+                        )
+                        or (
+                            activity.retarget
+                            and int(unit_mask.retarget.sum()) > 1
+                        )
+                    )
                 )
                 if activity.objective:
                     objective_actions[step_index, slot] = int(action.objective_slot)
@@ -1126,6 +1382,9 @@ class JointPPOPolicy:
             objective_active=on_host(objective_active),
             retarget_active=on_host(retarget_active),
             movement_active=on_host(movement_active),
+            motion_value_active=on_host(motion_value_active),
+            motion_active=on_host(motion_active),
+            plan_value_active=on_host(plan_value_active),
             plan_active=on_host(plan_active),
             sensor_active=on_host(sensor_active),
             sensor_draw_tokens=on_host(sensor_draw_tokens),
@@ -1138,7 +1397,7 @@ class JointPPOPolicy:
         return (
             packed,
             plan_active,
-            movement_active,
+            motion_active,
             sensor_active,
             active_term_count,
         )
@@ -1173,6 +1432,36 @@ class JointPPOPolicy:
                             0, indices
                         ),
                         actions.reshape(flat_count).index_select(0, indices),
+                    )
+                )
+                flat_log_probs = flat_log_probs.index_copy(
+                    0, indices, branch_log_probs
+                )
+                flat_entropies = flat_entropies.index_copy(
+                    0, indices, branch_entropies
+                )
+            return flat_log_probs.view(unit_shape), flat_entropies.view(unit_shape)
+
+        def motion_branch(
+            logits: Tensor,
+            masks: Tensor,
+            actions: Tensor,
+            active: Tensor,
+        ) -> tuple[Tensor, Tensor]:
+            indices = torch.nonzero(active.reshape(-1), as_tuple=False).squeeze(-1)
+            flat_log_probs = logits.new_zeros(flat_count)
+            flat_entropies = logits.new_zeros(flat_count)
+            if indices.numel():
+                branch_log_probs, branch_entropies = (
+                    _batched_masked_motion_statistics(
+                        logits.reshape(flat_count, logits.shape[-1]).index_select(
+                            0, indices
+                        ),
+                        masks.reshape(flat_count, masks.shape[-1]).index_select(
+                            0, indices
+                        ),
+                        actions.reshape(flat_count).index_select(0, indices),
+                        self.motion_learned_fraction(),
                     )
                 )
                 flat_log_probs = flat_log_probs.index_copy(
@@ -1222,10 +1511,11 @@ class JointPPOPolicy:
                 )
             )
             conditioned_log_probs, conditioned_entropies = (
-                _batched_masked_categorical_statistics(
+                _batched_masked_motion_statistics(
                     conditioned_movement_logits,
                     flat_movement_masks.index_select(0, conditioned_indices),
                     flat_movement_actions.index_select(0, conditioned_indices),
+                    self.motion_learned_fraction(),
                 )
             )
             conditioned_movement_log_probs = (
@@ -1270,7 +1560,7 @@ class JointPPOPolicy:
                 )
 
         base_movement_active = packed.movement_active & ~packed.objective_active
-        base_movement_log_probs, base_movement_entropies = categorical_branch(
+        base_movement_log_probs, base_movement_entropies = motion_branch(
             output.movement_logits,
             packed.movement_masks,
             packed.movement_actions,
@@ -1504,6 +1794,120 @@ class JointPPOPolicy:
             weights *= float(active_count) / total
         return weights
 
+    @staticmethod
+    def _effective_decision_count(
+        active: np.ndarray, weights: np.ndarray | None = None
+    ) -> float:
+        """Return rollout effective sample size for one actor branch.
+
+        Unweighted branches have one effective sample per active decision.
+        Planning decisions use episode-balancing weights, so Kish's effective
+        sample size prevents a small number of heavily weighted unit-episodes
+        from looking like a large, reliable actor batch.
+        """
+
+        selected_count = int(active.sum())
+        if not selected_count:
+            return 0.0
+        if weights is None:
+            return float(selected_count)
+        if weights.shape != active.shape:
+            raise ValueError("effective-sample weights have the wrong shape")
+        selected = weights[active].astype(np.float64, copy=False)
+        weight_sum = float(selected.sum())
+        squared_sum = float(np.square(selected).sum())
+        if weight_sum <= 0.0 or squared_sum <= 0.0:
+            return 0.0
+        return float(weight_sum * weight_sum / squared_sum)
+
+    def _aggregate_rollout_kl(
+        self,
+        transitions: Sequence[JointTransition],
+        packed_rollout: _PackedPolicyRollout,
+        plan_sample_weights: np.ndarray,
+        monitored_branches: Mapping[str, bool],
+    ) -> dict[str, float]:
+        """Evaluate branch KL once over the fixed complete rollout.
+
+        This deliberately runs after an epoch.  A rare or compositionally odd
+        minibatch therefore cannot stop unrelated actor heads (or their
+        critics).  Planning uses exactly the same episode-balanced weights as
+        its surrogate objective.
+        """
+
+        numerators = {name: 0.0 for name in ("plan", "motion", "sensor")}
+        denominators = {name: 0.0 for name in numerators}
+        if not any(bool(monitored_branches.get(name, False)) for name in numerators):
+            return numerators
+
+        batch_size = self.config.value_inference_batch_size
+        with torch.no_grad():
+            for start in range(0, len(transitions), batch_size):
+                stop = min(start + batch_size, len(transitions))
+                indices = np.arange(start, stop, dtype=np.int64)
+                index_tensor = torch.from_numpy(indices)
+                observation_batch = torch.as_tensor(
+                    np.asarray(
+                        [transitions[index].observations for index in indices],
+                        dtype=np.float32,
+                    ),
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                output_batch = self.network(observation_batch)
+                packed_batch = packed_rollout.select(
+                    index_tensor, device=self.device
+                )
+                evaluation = self._evaluate_packed_output(
+                    output_batch, packed_batch
+                )
+
+                branch_values = {
+                    "plan": (
+                        evaluation.plan_log_probs,
+                        packed_batch.old_plan_log_probs,
+                        packed_batch.plan_active,
+                    ),
+                    "motion": (
+                        evaluation.motion_log_probs,
+                        packed_batch.old_motion_log_probs,
+                        packed_batch.motion_active,
+                    ),
+                    "sensor": (
+                        evaluation.sensor_log_probs,
+                        packed_batch.old_sensor_log_probs,
+                        packed_batch.sensor_active,
+                    ),
+                }
+                for name, (new_all, old_all, active) in branch_values.items():
+                    if not bool(monitored_branches.get(name, False)) or not bool(
+                        active.any().item()
+                    ):
+                        continue
+                    log_ratio = new_all[active] - old_all[active]
+                    kl_samples = (torch.exp(log_ratio) - 1.0) - log_ratio
+                    if name == "plan":
+                        weights = torch.as_tensor(
+                            plan_sample_weights[indices],
+                            dtype=kl_samples.dtype,
+                            device=self.device,
+                        )[active]
+                    else:
+                        weights = torch.ones_like(kl_samples)
+                    numerators[name] += float((kl_samples * weights).sum().item())
+                    denominators[name] += float(weights.sum().item())
+
+                del evaluation, packed_batch, output_batch, observation_batch
+
+        return {
+            name: (
+                numerators[name] / denominators[name]
+                if denominators[name] > 0.0
+                else 0.0
+            )
+            for name in numerators
+        }
+
     def update(
         self,
         buffer: JointTrajectoryBuffer,
@@ -1532,7 +1936,7 @@ class JointPPOPolicy:
         if missing_branch_data:
             preview = ", ".join(str(value) for value in missing_branch_data[:8])
             raise ValueError(
-                "schema 3 PPO updates require explicit plan/motion/sensor rewards "
+                "schema 4 PPO updates require explicit plan/motion/sensor rewards "
                 f"and values; missing transition indices: {preview}"
             )
 
@@ -1616,8 +2020,13 @@ class JointPPOPolicy:
             sensor_active,
             active_term_count,
         ) = self._pack_policy_rollout(transitions)
+        plan_value_active = packed_rollout.plan_value_active.numpy()
+        motion_value_active = packed_rollout.motion_value_active.numpy()
         plan_sample_weights = self._episode_balanced_plan_weights(
             transitions, plan_active
+        )
+        plan_value_sample_weights = self._episode_balanced_plan_weights(
+            transitions, plan_value_active
         )
         normalized_plan_advantages = self._normalize_active(
             plan_advantages,
@@ -1650,6 +2059,7 @@ class JointPPOPolicy:
             normalized_sensor_advantages
         )
         plan_sample_weights_tensor = on_host(plan_sample_weights)
+        plan_value_sample_weights_tensor = on_host(plan_value_sample_weights)
 
         learning_rate = self._linear_schedule(
             self.config.learning_rate,
@@ -1702,8 +2112,47 @@ class JointPPOPolicy:
         sensor_decisions = int(sensor_active.sum())
         actor_decisions = plan_decisions + motion_decisions + sensor_decisions
         total_plan_weight = float(plan_sample_weights.sum())
+        total_plan_value_weight = float(plan_value_sample_weights.sum())
+        plan_actor_n_eff = self._effective_decision_count(
+            plan_active, plan_sample_weights
+        )
+        motion_actor_n_eff = self._effective_decision_count(motion_active)
+        sensor_actor_n_eff = self._effective_decision_count(sensor_active)
+        minimum_actor_decisions = float(self.config.min_actor_decisions)
+        phase_actor_allowed = {
+            "plan": self.config.training_phase in {"joint", "planner_sensor"},
+            "motion": self.config.training_phase in {"joint", "motion_only"},
+            "sensor": self.config.training_phase in {"joint", "planner_sensor"},
+        }
+        value_enabled = dict(phase_actor_allowed)
+        motion_learned_fraction = self.motion_learned_fraction()
+        actor_enabled = {
+            "plan": (
+                phase_actor_allowed["plan"]
+                and plan_decisions > 0
+                and plan_actor_n_eff >= minimum_actor_decisions
+            ),
+            "motion": (
+                phase_actor_allowed["motion"]
+                and motion_learned_fraction > 0.0
+                and motion_decisions > 0
+                and motion_actor_n_eff >= minimum_actor_decisions
+            ),
+            "sensor": (
+                phase_actor_allowed["sensor"]
+                and sensor_decisions > 0
+                and sensor_actor_n_eff >= minimum_actor_decisions
+                and self.update_count >= self.config.sensor_actor_start_update
+            ),
+        }
+        initially_enabled = dict(actor_enabled)
+        actor_kl_stopped = {name: False for name in actor_enabled}
+        actor_minibatch_updates = {name: 0 for name in actor_enabled}
+        last_rollout_kl = {name: 0.0 for name in actor_enabled}
+        kl_guard_epochs = 0
         for epoch in range(self.config.update_epochs):
             epochs_ran = epoch + 1
+            epoch_actor_enabled = dict(actor_enabled)
             permutation = self._rng.permutation(len(transitions))
             for start in range(0, len(transitions), self.config.minibatch_size):
                 indices = permutation[start : start + self.config.minibatch_size]
@@ -1730,8 +2179,18 @@ class JointPPOPolicy:
                     output_batch, packed_batch
                 )
                 plan_mask = packed_batch.plan_active
-                motion_mask = packed_batch.movement_active
+                plan_value_mask = packed_batch.plan_value_active
+                motion_mask = packed_batch.motion_active
+                motion_value_mask = packed_batch.motion_value_active
                 sensor_mask = packed_batch.sensor_active
+                if (
+                    self.config.training_phase == "motion_only"
+                    and not bool(motion_value_mask.any().item())
+                ):
+                    del evaluation, output_batch, packed_batch, observation_batch
+                    del plan_mask, plan_value_mask, motion_mask, motion_value_mask
+                    del sensor_mask
+                    continue
                 new_plan_log_probs = evaluation.plan_log_probs[plan_mask]
                 old_plan_log_probs = packed_batch.old_plan_log_probs[plan_mask]
                 plan_advantage_batch = device_batch(
@@ -1739,6 +2198,9 @@ class JointPPOPolicy:
                 )[plan_mask]
                 plan_sample_weight_batch = device_batch(
                     plan_sample_weights_tensor
+                )
+                plan_value_sample_weight_batch = device_batch(
+                    plan_value_sample_weights_tensor
                 )
                 plan_weight_batch = plan_sample_weight_batch[plan_mask]
                 plan_entropies = evaluation.plan_entropies[plan_mask]
@@ -1765,26 +2227,42 @@ class JointPPOPolicy:
                     if total_plan_weight > 0.0
                     else None
                 )
-                plan_loss, plan_kl, plan_clip = self._ppo_actor_loss(
-                    new_plan_log_probs,
-                    old_plan_log_probs,
-                    plan_advantage_batch,
-                    zero,
-                    weights=plan_weight_batch,
-                    loss_normalizer=plan_loss_normalizer,
+                plan_value_loss_normalizer = (
+                    total_plan_value_weight
+                    * float(len(indices))
+                    / float(len(transitions))
+                    if total_plan_value_weight > 0.0
+                    else None
                 )
-                motion_loss, motion_kl, motion_clip = self._ppo_actor_loss(
-                    new_motion_log_probs,
-                    old_motion_log_probs,
-                    motion_advantage_batch,
-                    zero,
-                )
-                sensor_loss, sensor_kl, sensor_clip = self._ppo_actor_loss(
-                    new_sensor_log_probs,
-                    old_sensor_log_probs,
-                    sensor_advantage_batch,
-                    zero,
-                )
+                if epoch_actor_enabled["plan"]:
+                    plan_loss, plan_kl, plan_clip = self._ppo_actor_loss(
+                        new_plan_log_probs,
+                        old_plan_log_probs,
+                        plan_advantage_batch,
+                        zero,
+                        weights=plan_weight_batch,
+                        loss_normalizer=plan_loss_normalizer,
+                    )
+                else:
+                    plan_loss = plan_kl = plan_clip = zero
+                if epoch_actor_enabled["motion"]:
+                    motion_loss, motion_kl, motion_clip = self._ppo_actor_loss(
+                        new_motion_log_probs,
+                        old_motion_log_probs,
+                        motion_advantage_batch,
+                        zero,
+                    )
+                else:
+                    motion_loss = motion_kl = motion_clip = zero
+                if epoch_actor_enabled["sensor"]:
+                    sensor_loss, sensor_kl, sensor_clip = self._ppo_actor_loss(
+                        new_sensor_log_probs,
+                        old_sensor_log_probs,
+                        sensor_advantage_batch,
+                        zero,
+                    )
+                else:
+                    sensor_loss = sensor_kl = sensor_clip = zero
                 policy_loss = (
                     plan_loss
                     + motion_loss
@@ -1793,9 +2271,21 @@ class JointPPOPolicy:
                 kl_values = [
                     value
                     for value, present in (
-                        (plan_kl, new_plan_log_probs.numel() > 0),
-                        (motion_kl, new_motion_log_probs.numel() > 0),
-                        (sensor_kl, new_sensor_log_probs.numel() > 0),
+                        (
+                            plan_kl,
+                            epoch_actor_enabled["plan"]
+                            and new_plan_log_probs.numel() > 0,
+                        ),
+                        (
+                            motion_kl,
+                            epoch_actor_enabled["motion"]
+                            and new_motion_log_probs.numel() > 0,
+                        ),
+                        (
+                            sensor_kl,
+                            epoch_actor_enabled["sensor"]
+                            and new_sensor_log_probs.numel() > 0,
+                        ),
                     )
                     if present
                 ]
@@ -1803,69 +2293,116 @@ class JointPPOPolicy:
                 clip_values = [
                     value
                     for value, present in (
-                        (plan_clip, new_plan_log_probs.numel() > 0),
-                        (motion_clip, new_motion_log_probs.numel() > 0),
-                        (sensor_clip, new_sensor_log_probs.numel() > 0),
+                        (
+                            plan_clip,
+                            epoch_actor_enabled["plan"]
+                            and new_plan_log_probs.numel() > 0,
+                        ),
+                        (
+                            motion_clip,
+                            epoch_actor_enabled["motion"]
+                            and new_motion_log_probs.numel() > 0,
+                        ),
+                        (
+                            sensor_clip,
+                            epoch_actor_enabled["sensor"]
+                            and new_sensor_log_probs.numel() > 0,
+                        ),
                     )
                     if present
                 ]
                 clip_fraction = (
                     torch.stack(clip_values).mean() if clip_values else zero
                 )
-                observed_kl = float(approximate_kl.detach().item())
-                max_observed_kl = max(max_observed_kl, observed_kl)
-                if new_plan_log_probs.numel():
-                    max_observed_plan_kl = max(
-                        max_observed_plan_kl, float(plan_kl.detach().item())
-                    )
-                if new_motion_log_probs.numel():
-                    max_observed_motion_kl = max(
-                        max_observed_motion_kl, float(motion_kl.detach().item())
-                    )
-                if new_sensor_log_probs.numel():
-                    max_observed_sensor_kl = max(
-                        max_observed_sensor_kl, float(sensor_kl.detach().item())
-                    )
-                if (
-                    self.config.target_kl > 0.0
-                    and observed_kl > 1.5 * self.config.target_kl
-                ):
-                    early_stopped = True
-                    early_stop_kl = observed_kl
-                    break
-
+                if self.config.kl_guard_mode == "legacy_minibatch_max":
+                    observed_kl = float(approximate_kl.detach().item())
+                    max_observed_kl = max(max_observed_kl, observed_kl)
+                    if epoch_actor_enabled["plan"] and new_plan_log_probs.numel():
+                        max_observed_plan_kl = max(
+                            max_observed_plan_kl, float(plan_kl.detach().item())
+                        )
+                    if epoch_actor_enabled["motion"] and new_motion_log_probs.numel():
+                        max_observed_motion_kl = max(
+                            max_observed_motion_kl, float(motion_kl.detach().item())
+                        )
+                    if epoch_actor_enabled["sensor"] and new_sensor_log_probs.numel():
+                        max_observed_sensor_kl = max(
+                            max_observed_sensor_kl, float(sensor_kl.detach().item())
+                        )
+                    if (
+                        self.config.target_kl > 0.0
+                        and observed_kl > 1.5 * self.config.target_kl
+                    ):
+                        early_stopped = True
+                        early_stop_kl = observed_kl
+                        break
+                elif self.config.target_kl <= 0.0:
+                    # A disabled guard should still report useful diagnostics
+                    # without paying for an extra full-rollout monitor pass.
+                    observed_kl = float(approximate_kl.detach().item())
+                    max_observed_kl = max(max_observed_kl, observed_kl)
+                    if epoch_actor_enabled["plan"] and new_plan_log_probs.numel():
+                        max_observed_plan_kl = max(
+                            max_observed_plan_kl, float(plan_kl.detach().item())
+                        )
+                    if epoch_actor_enabled["motion"] and new_motion_log_probs.numel():
+                        max_observed_motion_kl = max(
+                            max_observed_motion_kl, float(motion_kl.detach().item())
+                        )
+                    if epoch_actor_enabled["sensor"] and new_sensor_log_probs.numel():
+                        max_observed_sensor_kl = max(
+                            max_observed_sensor_kl, float(sensor_kl.detach().item())
+                        )
                 old_plan_batch = device_batch(old_plan_values_tensor)
                 plan_return_batch = device_batch(plan_returns_tensor)
                 old_motion_batch = device_batch(old_motion_values_tensor)
                 motion_return_batch = device_batch(motion_returns_tensor)
                 old_sensor_batch = device_batch(old_sensor_values_tensor)
                 sensor_return_batch = device_batch(sensor_returns_tensor)
-                plan_value_loss = self._clipped_value_loss(
-                    output_batch.plan_values_by_unit,
-                    old_plan_batch,
-                    plan_return_batch,
-                    mask=plan_mask,
-                    weights=plan_sample_weight_batch,
-                    loss_normalizer=plan_loss_normalizer,
+                plan_value_loss = (
+                    self._clipped_value_loss(
+                        output_batch.plan_values_by_unit,
+                        old_plan_batch,
+                        plan_return_batch,
+                        mask=plan_value_mask,
+                        weights=plan_value_sample_weight_batch,
+                        loss_normalizer=plan_value_loss_normalizer,
+                    )
+                    if value_enabled["plan"]
+                    else zero
                 )
-                motion_value_loss = self._clipped_value_loss(
-                    output_batch.motion_values_by_unit,
-                    old_motion_batch,
-                    motion_return_batch,
-                    mask=motion_mask,
+                motion_value_loss = (
+                    self._clipped_value_loss(
+                        output_batch.motion_values_by_unit,
+                        old_motion_batch,
+                        motion_return_batch,
+                        mask=motion_value_mask,
+                    )
+                    if value_enabled["motion"]
+                    else zero
                 )
-                sensor_value_loss = self._clipped_value_loss(
-                    output_batch.sensor_value,
-                    old_sensor_batch,
-                    sensor_return_batch,
+                sensor_value_loss = (
+                    self._clipped_value_loss(
+                        output_batch.sensor_value,
+                        old_sensor_batch,
+                        sensor_return_batch,
+                    )
+                    if value_enabled["sensor"]
+                    else zero
                 )
-                active_value_losses = [sensor_value_loss]
-                if bool(plan_active[indices].any()):
+                active_value_losses = []
+                if value_enabled["plan"] and bool(plan_value_mask.any().item()):
                     active_value_losses.append(plan_value_loss)
-                if bool(motion_active[indices].any()):
+                if value_enabled["motion"] and bool(motion_value_mask.any().item()):
                     active_value_losses.append(motion_value_loss)
-                value_loss = torch.stack(active_value_losses).mean()
-                if plan_entropies.numel():
+                if value_enabled["sensor"]:
+                    active_value_losses.append(sensor_value_loss)
+                value_loss = (
+                    torch.stack(active_value_losses).mean()
+                    if active_value_losses
+                    else zero
+                )
+                if epoch_actor_enabled["plan"] and plan_entropies.numel():
                     entropy_weights = plan_weight_batch
                     entropy_normalizer = float(
                         plan_loss_normalizer
@@ -1879,20 +2416,32 @@ class JointPPOPolicy:
                     plan_entropy = zero
                 motion_entropy = (
                     motion_entropies.mean()
-                    if motion_entropies.numel()
+                    if epoch_actor_enabled["motion"] and motion_entropies.numel()
                     else zero
                 )
                 sensor_entropy = (
                     sensor_entropies.mean()
-                    if sensor_entropies.numel()
+                    if epoch_actor_enabled["sensor"] and sensor_entropies.numel()
                     else zero
                 )
                 active_entropies = [
                     value
                     for value, present in (
-                        (plan_entropy, plan_entropies.numel() > 0),
-                        (motion_entropy, motion_entropies.numel() > 0),
-                        (sensor_entropy, sensor_entropies.numel() > 0),
+                        (
+                            plan_entropy,
+                            epoch_actor_enabled["plan"]
+                            and plan_entropies.numel() > 0,
+                        ),
+                        (
+                            motion_entropy,
+                            epoch_actor_enabled["motion"]
+                            and motion_entropies.numel() > 0,
+                        ),
+                        (
+                            sensor_entropy,
+                            epoch_actor_enabled["sensor"]
+                            and sensor_entropies.numel() > 0,
+                        ),
                     )
                     if present
                 ]
@@ -1907,11 +2456,26 @@ class JointPPOPolicy:
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
-                    self.network.parameters(), self.config.max_grad_norm
+                    self._trainable_parameters, self.config.max_grad_norm
                 )
                 if not bool(torch.isfinite(grad_norm).item()):
                     raise FloatingPointError("joint PPO gradient became NaN or infinite")
                 self.optimizer.step()
+                # Count only minibatches that actually reached optimizer.step.
+                # In legacy mode a KL guard can reject the current minibatch
+                # before any gradient is applied.
+                actor_minibatch_updates["plan"] += int(
+                    epoch_actor_enabled["plan"]
+                    and new_plan_log_probs.numel() > 0
+                )
+                actor_minibatch_updates["motion"] += int(
+                    epoch_actor_enabled["motion"]
+                    and new_motion_log_probs.numel() > 0
+                )
+                actor_minibatch_updates["sensor"] += int(
+                    epoch_actor_enabled["sensor"]
+                    and new_sensor_log_probs.numel() > 0
+                )
 
                 totals["policy_loss"] += float(policy_loss.detach().item())
                 totals["plan_policy_loss"] += float(plan_loss.detach().item())
@@ -1949,14 +2513,61 @@ class JointPPOPolicy:
                 del plan_entropies, motion_entropies, sensor_entropies
                 del plan_advantage_batch, motion_advantage_batch
                 del sensor_advantage_batch, plan_sample_weight_batch
-                del plan_weight_batch, plan_mask, motion_mask, sensor_mask
+                del plan_value_sample_weight_batch, plan_weight_batch
+                del plan_mask, plan_value_mask, motion_mask, motion_value_mask
+                del sensor_mask
                 del old_plan_batch, old_motion_batch, old_sensor_batch
                 del plan_return_batch, motion_return_batch, sensor_return_batch
                 del plan_kl, motion_kl, sensor_kl, approximate_kl
                 del plan_clip, motion_clip, sensor_clip, clip_fraction
                 del active_value_losses, active_entropies, kl_values, clip_values, zero
-            if early_stopped:
+            if self.config.kl_guard_mode == "legacy_minibatch_max":
+                if early_stopped:
+                    break
+                continue
+            if self.config.target_kl <= 0.0 or not any(initially_enabled.values()):
+                continue
+            epoch_rollout_kl = self._aggregate_rollout_kl(
+                transitions,
+                packed_rollout,
+                plan_sample_weights,
+                initially_enabled,
+            )
+            kl_guard_epochs += 1
+            for name in last_rollout_kl:
+                if initially_enabled[name]:
+                    last_rollout_kl[name] = epoch_rollout_kl[name]
+            max_observed_plan_kl = max(
+                max_observed_plan_kl, epoch_rollout_kl["plan"]
+            )
+            max_observed_motion_kl = max(
+                max_observed_motion_kl, epoch_rollout_kl["motion"]
+            )
+            max_observed_sensor_kl = max(
+                max_observed_sensor_kl, epoch_rollout_kl["sensor"]
+            )
+            enabled_epoch_kls = [
+                epoch_rollout_kl[name]
+                for name in epoch_rollout_kl
+                if initially_enabled[name]
+            ]
+            epoch_max_kl = max(enabled_epoch_kls, default=0.0)
+            max_observed_kl = max(max_observed_kl, epoch_max_kl)
+            hard_threshold = (
+                self.config.kl_hard_multiplier * self.config.target_kl
+            )
+            if epoch_max_kl > hard_threshold:
+                early_stopped = True
+                early_stop_kl = epoch_max_kl
                 break
+            soft_threshold = 1.5 * self.config.target_kl
+            for name in actor_enabled:
+                if (
+                    epoch_actor_enabled[name]
+                    and epoch_rollout_kl[name] > soft_threshold
+                ):
+                    actor_enabled[name] = False
+                    actor_kl_stopped[name] = True
 
         if clear_buffer:
             buffer.clear()
@@ -1964,6 +2575,17 @@ class JointPPOPolicy:
         self.transition_count += len(transitions)
         divisor = max(minibatch_updates, 1)
         self.last_metrics = {key: value / divisor for key, value in totals.items()}
+        if (
+            self.config.kl_guard_mode == "rollout_branch"
+            and kl_guard_epochs > 0
+        ):
+            # The public KL metrics describe the reliable fixed-rollout
+            # estimate, not an average of noisy, differently composed
+            # minibatches.
+            self.last_metrics["plan_approx_kl"] = last_rollout_kl["plan"]
+            self.last_metrics["motion_approx_kl"] = last_rollout_kl["motion"]
+            self.last_metrics["sensor_approx_kl"] = last_rollout_kl["sensor"]
+            self.last_metrics["approx_kl"] = max(last_rollout_kl.values())
         weighted_plan_advantage_mean = (
             float(
                 np.average(
@@ -1981,8 +2603,8 @@ class JointPPOPolicy:
                 "plan_decisions": float(plan_decisions),
                 "motion_decisions": float(motion_decisions),
                 "sensor_decisions": float(sensor_decisions),
-                "plan_value_samples": float(plan_active.sum()),
-                "motion_value_samples": float(motion_active.sum()),
+                "plan_value_samples": float(plan_value_active.sum()),
+                "motion_value_samples": float(motion_value_active.sum()),
                 "sensor_value_samples": float(len(transitions)),
                 "active_log_prob_terms": float(active_term_count),
                 "epochs_ran": float(epochs_ran),
@@ -1993,6 +2615,44 @@ class JointPPOPolicy:
                 "max_plan_approx_kl": float(max_observed_plan_kl),
                 "max_motion_approx_kl": float(max_observed_motion_kl),
                 "max_sensor_approx_kl": float(max_observed_sensor_kl),
+                "plan_actor_n_eff": float(plan_actor_n_eff),
+                "motion_actor_n_eff": float(motion_actor_n_eff),
+                "sensor_actor_n_eff": float(sensor_actor_n_eff),
+                "motion_learned_fraction": float(motion_learned_fraction),
+                "plan_value_enabled": float(value_enabled["plan"]),
+                "motion_value_enabled": float(value_enabled["motion"]),
+                "sensor_value_enabled": float(value_enabled["sensor"]),
+                "plan_actor_enabled": float(initially_enabled["plan"]),
+                "motion_actor_enabled": float(initially_enabled["motion"]),
+                "sensor_actor_enabled": float(initially_enabled["sensor"]),
+                "plan_actor_enabled_after_kl_guard": float(actor_enabled["plan"]),
+                "motion_actor_enabled_after_kl_guard": float(
+                    actor_enabled["motion"]
+                ),
+                "sensor_actor_enabled_after_kl_guard": float(
+                    actor_enabled["sensor"]
+                ),
+                "plan_actor_kl_stopped": float(actor_kl_stopped["plan"]),
+                "motion_actor_kl_stopped": float(actor_kl_stopped["motion"]),
+                "sensor_actor_kl_stopped": float(actor_kl_stopped["sensor"]),
+                "plan_actor_minibatch_updates": float(
+                    actor_minibatch_updates["plan"]
+                ),
+                "motion_actor_minibatch_updates": float(
+                    actor_minibatch_updates["motion"]
+                ),
+                "sensor_actor_minibatch_updates": float(
+                    actor_minibatch_updates["sensor"]
+                ),
+                "kl_guard_epochs": float(kl_guard_epochs),
+                "kl_soft_threshold": float(1.5 * self.config.target_kl),
+                "kl_hard_threshold": float(
+                    self.config.kl_hard_multiplier * self.config.target_kl
+                ),
+                "hard_kl_stopped": float(
+                    early_stopped
+                    and self.config.kl_guard_mode == "rollout_branch"
+                ),
                 "learning_rate": learning_rate,
                 "entropy_coef": entropy_coef,
                 "plan_advantage_mean": weighted_plan_advantage_mean,
@@ -2226,18 +2886,41 @@ class JointPPOPolicy:
             raise ValueError("joint PPO checkpoint is not a dictionary")
         if checkpoint.get("algorithm") != self.ALGORITHM:
             raise ValueError("checkpoint uses a different algorithm")
-        if int(checkpoint.get("schema_version", -1)) != self.CHECKPOINT_SCHEMA_VERSION:
+        schema_version = int(checkpoint.get("schema_version", -1))
+        if schema_version not in {3, self.CHECKPOINT_SCHEMA_VERSION}:
             raise ValueError("unsupported joint PPO checkpoint schema")
+        if schema_version == 3 and load_optimizer:
+            raise ValueError(
+                "schema-3 checkpoints can only migrate weights; "
+                "start a schema-4 optimizer with load_weights() or "
+                "from_checkpoint(..., load_optimizer=False)"
+            )
         if checkpoint.get("space") != asdict(self.space):
             raise ValueError("checkpoint joint space differs from this policy")
         saved_config = checkpoint.get("config")
         if not isinstance(saved_config, dict):
             raise ValueError("checkpoint config is missing")
+        try:
+            # Schema-3 checkpoints created before branch curricula/KL guards
+            # lack those keys.  They used the minibatch-max guard, while a new
+            # dataclass defaults to the rollout-level branch guard.  Mark that
+            # historical behavior explicitly, then fill the remaining safe
+            # defaults before strict config comparison.
+            normalized_saved_config = dict(saved_config)
+            normalized_saved_config.setdefault(
+                "kl_guard_mode", "legacy_minibatch_max"
+            )
+            saved_config_with_defaults = asdict(
+                JointPPOConfig(**normalized_saved_config)
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("checkpoint policy config is invalid") from error
         current_config = asdict(self.config)
         differing_config = sorted(
             name
-            for name in set(saved_config) | set(current_config)
-            if name != "device" and saved_config.get(name) != current_config.get(name)
+            for name in set(saved_config_with_defaults) | set(current_config)
+            if name != "device"
+            and saved_config_with_defaults.get(name) != current_config.get(name)
         )
         if differing_config:
             raise ValueError(
@@ -2245,15 +2928,15 @@ class JointPPOPolicy:
                 + ", ".join(differing_config)
             )
         self._load_network_weights(checkpoint)
+        self.update_count = int(checkpoint.get("update_count", 0))
+        self.transition_count = int(checkpoint.get("transition_count", 0))
+        self.episode_count = int(checkpoint.get("episode_count", 0))
+        self.last_metrics = dict(checkpoint.get("last_metrics", {}) or {})
         if load_optimizer:
             optimizer_state = checkpoint.get("optimizer")
             if not isinstance(optimizer_state, dict):
                 raise ValueError("checkpoint optimizer state is missing")
             self.optimizer.load_state_dict(optimizer_state)
-            self.update_count = int(checkpoint.get("update_count", 0))
-            self.transition_count = int(checkpoint.get("transition_count", 0))
-            self.episode_count = int(checkpoint.get("episode_count", 0))
-            self.last_metrics = dict(checkpoint.get("last_metrics", {}) or {})
             numpy_state = checkpoint.get("numpy_rng_state")
             if numpy_state is not None:
                 self._rng.bit_generator.state = numpy_state
@@ -2271,7 +2954,8 @@ class JointPPOPolicy:
             raise ValueError("joint PPO checkpoint is not a dictionary")
         if checkpoint.get("algorithm") != self.ALGORITHM:
             raise ValueError("checkpoint uses a different algorithm")
-        if int(checkpoint.get("schema_version", -1)) != self.CHECKPOINT_SCHEMA_VERSION:
+        schema_version = int(checkpoint.get("schema_version", -1))
+        if schema_version not in {3, self.CHECKPOINT_SCHEMA_VERSION}:
             raise ValueError("unsupported joint PPO checkpoint schema")
         if checkpoint.get("space") != asdict(self.space):
             raise ValueError("checkpoint joint space differs from this policy")
@@ -2280,7 +2964,12 @@ class JointPPOPolicy:
             raise ValueError("checkpoint network state is missing")
 
         current_state = self.network.state_dict()
-        missing = sorted(set(current_state) - set(network_state))
+        allowed_missing = {
+            name
+            for name in current_state
+            if schema_version == 3 and name.startswith("motion_adapter.")
+        }
+        missing = sorted(set(current_state) - set(network_state) - allowed_missing)
         unexpected = sorted(set(network_state) - set(current_state))
         shape_mismatches = sorted(
             name
@@ -2299,7 +2988,9 @@ class JointPPOPolicy:
                 "checkpoint network structure differs from this policy: "
                 + "; ".join(details)
             )
-        self.network.load_state_dict(network_state, strict=True)
+        migrated_state = dict(current_state)
+        migrated_state.update(network_state)
+        self.network.load_state_dict(migrated_state, strict=True)
 
     def load(
         self,
@@ -2327,11 +3018,20 @@ class JointPPOPolicy:
         checkpoint = torch.load(path, map_location="cpu", weights_only=True)
         if not isinstance(checkpoint, dict):
             raise ValueError("joint PPO checkpoint is not a dictionary")
+        if int(checkpoint.get("schema_version", -1)) not in {
+            3,
+            cls.CHECKPOINT_SCHEMA_VERSION,
+        }:
+            raise ValueError("unsupported joint PPO checkpoint schema")
         raw_space = checkpoint.get("space")
         raw_config = checkpoint.get("config")
         if not isinstance(raw_space, dict) or not isinstance(raw_config, dict):
             raise ValueError("joint PPO checkpoint lacks space or config metadata")
-        config = JointPPOConfig(**raw_config)
+        normalized_raw_config = dict(raw_config)
+        normalized_raw_config.setdefault(
+            "kl_guard_mode", "legacy_minibatch_max"
+        )
+        config = JointPPOConfig(**normalized_raw_config)
         if device is not None:
             config = replace(config, device=device)
         policy = cls(JointSpaceSpec(**raw_space), config)

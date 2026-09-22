@@ -6,6 +6,7 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import torch
@@ -14,6 +15,7 @@ from personal_train.joint_policy import JointPPOConfig, JointPPOPolicy
 from personal_train.joint_rl_core import (
     BinaryChoice,
     JointAction,
+    JointActionMask,
     JointSpaceSpec,
     JointTrajectoryBuffer,
     JointTransition,
@@ -22,6 +24,7 @@ from personal_train.joint_rl_core import (
     SharedSensorConfig,
     SharedSensorState,
     UnitAction,
+    UnitActionMask,
     UnitControlState,
     UnitPhase,
     branch_activity,
@@ -87,6 +90,34 @@ class JointPolicyTests(unittest.TestCase):
             self.policy.network.placement_log_std_head.bias.fill_(-0.7)
             self.policy.network.sensor_stop_head.bias.fill_(-3.0)
             self.policy.network.sensor_slot_head[-1].bias.fill_(3.0)
+
+    def _one_step_buffer(
+        self, policy: JointPPOPolicy | None = None
+    ) -> JointTrajectoryBuffer:
+        selected_policy = policy or self.policy
+        action, trace = selected_policy.sample(
+            self.observations, self.states, self.mask, deterministic=True
+        )
+        buffer = JointTrajectoryBuffer(self.space, observation_dim=4)
+        buffer.append(
+            JointTransition(
+                observations=self.observations,
+                states=self.states,
+                mask=self.mask,
+                action=action,
+                trace=trace,
+                rewards=(0.4, 0.2, 0.0),
+                team_reward=0.3,
+                next_observations=self.observations,
+                terminated=(True, True, True),
+                truncated=(False, False, False),
+                team_terminated=True,
+                plan_rewards=(0.8, 0.4, 0.0),
+                motion_rewards=(0.1, 0.2, 0.0),
+                sensor_reward=0.3,
+            )
+        )
+        return buffer
 
     def test_sample_and_evaluate_preserve_only_active_terms(self) -> None:
         self._force_conditional_yes_actions()
@@ -445,6 +476,517 @@ class JointPolicyTests(unittest.TestCase):
         self.assertEqual(metrics["motion_decisions"], 2.0)
         self.assertEqual(metrics["sensor_decisions"], 1.0)
 
+    def test_actor_sample_gate_skips_surrogate_but_trains_critics(self) -> None:
+        policy = JointPPOPolicy(
+            self.space,
+            JointPPOConfig(
+                observation_dim=4,
+                hidden_dim=32,
+                update_epochs=2,
+                minibatch_size=2,
+                target_kl=1.0,
+                min_actor_decisions=100,
+                seed=29,
+                device="cpu",
+            ),
+        )
+        actor_prefixes = (
+            "activation_head.",
+            "objective_head.",
+            "objective_embedding.",
+            "target_condition_encoder.",
+            "placement_mean_head.",
+            "placement_log_std_head.",
+            "initial_movement_head.",
+            "motion_adapter.",
+            "retarget_head.",
+            "movement_head.",
+            "sensor_slot_head.",
+            "sensor_stop_head.",
+        )
+        actor_before = {
+            name: value.detach().clone()
+            for name, value in policy.network.named_parameters()
+            if name.startswith(actor_prefixes)
+        }
+        critic_before = {
+            name: value.detach().clone()
+            for name, value in policy.network.named_parameters()
+            if name.startswith(("plan_critic.", "motion_critic.", "sensor_critic."))
+        }
+
+        metrics = policy.finish_episode(self._one_step_buffer(policy))
+
+        self.assertGreater(metrics["plan_actor_n_eff"], 0.0)
+        self.assertGreater(metrics["motion_actor_n_eff"], 0.0)
+        self.assertGreater(metrics["sensor_actor_n_eff"], 0.0)
+        for branch in ("plan", "motion", "sensor"):
+            self.assertEqual(metrics[f"{branch}_actor_enabled"], 0.0)
+            self.assertEqual(metrics[f"{branch}_actor_minibatch_updates"], 0.0)
+            self.assertEqual(metrics[f"{branch}_policy_loss"], 0.0)
+            self.assertEqual(metrics[f"{branch}_entropy"], 0.0)
+        for name, expected in actor_before.items():
+            self.assertTrue(
+                torch.equal(policy.network.state_dict()[name], expected), name
+            )
+        self.assertTrue(
+            any(
+                not torch.equal(policy.network.state_dict()[name], expected)
+                for name, expected in critic_before.items()
+            )
+        )
+
+    def test_motion_and_sensor_actor_start_updates_form_coarse_curriculum(self) -> None:
+        policy = JointPPOPolicy(
+            self.space,
+            JointPPOConfig(
+                observation_dim=4,
+                hidden_dim=32,
+                update_epochs=1,
+                minibatch_size=2,
+                target_kl=0.0,
+                motion_actor_start_update=1,
+                sensor_actor_start_update=2,
+                seed=31,
+                device="cpu",
+            ),
+        )
+        with torch.no_grad():
+            policy.network.movement_head.weight.zero_()
+            policy.network.movement_head.bias.copy_(
+                torch.tensor((-20.0, -20.0, 20.0))
+            )
+            policy.network.sensor_stop_head.weight.zero_()
+            policy.network.sensor_stop_head.bias.fill_(-20.0)
+            for layer in policy.network.sensor_slot_head:
+                if isinstance(layer, torch.nn.Linear):
+                    layer.weight.zero_()
+                    layer.bias.zero_()
+            policy.network.sensor_slot_head[-1].bias.fill_(20.0)
+        self.assertEqual(policy.motion_learned_fraction(), 0.0)
+
+        scripted, _ = policy.sample(
+            self.observations,
+            self.states,
+            self.mask,
+            deterministic=True,
+        )
+        self.assertEqual(scripted.units[1].movement, Movement.NEUTRAL)
+        self.assertEqual(scripted.shared_sensor.requester_slots, ())
+        policy.set_training(False)
+        evaluated, _ = policy.sample(
+            self.observations, self.states, self.mask, deterministic=True
+        )
+        self.assertEqual(evaluated.units[1].movement, Movement.NEUTRAL)
+        policy.set_training(True)
+
+        first = policy.finish_episode(self._one_step_buffer(policy))
+        self.assertEqual(policy.motion_learned_fraction(), 1.0)
+        motion_live_sensor_scripted, _ = policy.sample(
+            self.observations,
+            self.states,
+            self.mask,
+            deterministic=True,
+        )
+        self.assertEqual(
+            motion_live_sensor_scripted.units[1].movement,
+            Movement.POSITIVE,
+        )
+        self.assertEqual(
+            motion_live_sensor_scripted.shared_sensor.requester_slots,
+            (),
+        )
+        second = policy.finish_episode(self._one_step_buffer(policy))
+        all_live, _ = policy.sample(
+            self.observations,
+            self.states,
+            self.mask,
+            deterministic=True,
+        )
+        self.assertTrue(all_live.shared_sensor.requester_slots)
+        third = policy.finish_episode(self._one_step_buffer(policy))
+
+        self.assertEqual(first["plan_actor_enabled"], 1.0)
+        self.assertEqual(first["motion_actor_enabled"], 0.0)
+        self.assertEqual(first["sensor_actor_enabled"], 0.0)
+        self.assertEqual(second["motion_actor_enabled"], 1.0)
+        self.assertEqual(second["sensor_actor_enabled"], 0.0)
+        self.assertEqual(third["sensor_actor_enabled"], 1.0)
+
+    def test_motion_curriculum_is_an_on_policy_probability_mixture(self) -> None:
+        policy = JointPPOPolicy(
+            self.space,
+            JointPPOConfig(
+                observation_dim=4,
+                hidden_dim=32,
+                motion_behavior_mode="curriculum",
+                motion_curriculum_updates=4,
+                seed=43,
+                device="cpu",
+            ),
+        )
+        with torch.no_grad():
+            policy.network.movement_head.weight.zero_()
+            policy.network.movement_head.bias.copy_(
+                torch.tensor((-20.0, -20.0, 20.0))
+            )
+        self.assertEqual(policy.motion_learned_fraction(), 0.25)
+
+        action, trace = policy.sample(
+            self.observations,
+            self.states,
+            self.mask,
+            deterministic=True,
+        )
+        self.assertEqual(action.units[1].movement, Movement.NEUTRAL)
+        evaluation = policy.evaluate(
+            self.observations,
+            self.states,
+            self.mask,
+            action,
+            shared_sensor_trace=trace.shared_sensor,
+        )
+        self.assertAlmostEqual(
+            float(evaluation.log_prob_by_term["unit/1/movement"].detach().item()),
+            trace.log_prob_by_term["unit/1/movement"],
+            places=6,
+        )
+
+        policy.update_count = 3
+        self.assertEqual(policy.motion_learned_fraction(), 1.0)
+        learned, _ = policy.sample(
+            self.observations,
+            self.states,
+            self.mask,
+            deterministic=True,
+        )
+        self.assertEqual(learned.units[1].movement, Movement.POSITIVE)
+
+    def test_forced_motion_choice_trains_value_without_actor_sample(self) -> None:
+        by_unit = dict(self.mask.by_unit)
+        active_mask = by_unit[1]
+        by_unit[1] = UnitActionMask(
+            activation=active_mask.activation,
+            objective=active_mask.objective,
+            retarget=active_mask.retarget,
+            movement=np.asarray((False, True, False), dtype=np.bool_),
+            placement_possible=active_mask.placement_possible,
+        )
+        forced_mask = JointActionMask(
+            space=self.space,
+            by_unit=by_unit,
+            shared_sensor_eligible=self.mask.shared_sensor_eligible,
+            shared_sensor_max_requests=self.mask.shared_sensor_max_requests,
+        )
+        action, trace = self.policy.sample(
+            self.observations,
+            self.states,
+            forced_mask,
+            deterministic=True,
+        )
+        buffer = JointTrajectoryBuffer(self.space, observation_dim=4)
+        buffer.append(
+            JointTransition(
+                observations=self.observations,
+                states=self.states,
+                mask=forced_mask,
+                action=action,
+                trace=trace,
+                rewards=(0.0, 0.0, 0.0),
+                team_reward=0.0,
+                next_observations=self.observations,
+                terminated=(True, True, True),
+                truncated=(False, False, False),
+                team_terminated=True,
+                plan_rewards=(0.0, 0.0, 0.0),
+                motion_rewards=(0.0, 1.0, 0.0),
+                sensor_reward=0.0,
+            )
+        )
+        packed, _, motion_active, _, _ = self.policy._pack_policy_rollout(
+            buffer.items
+        )
+        self.assertEqual(int(packed.movement_active.sum().item()), 1)
+        self.assertEqual(int(packed.motion_value_active.sum().item()), 1)
+        self.assertEqual(int(packed.motion_active.sum().item()), 0)
+        self.assertEqual(int(motion_active.sum()), 0)
+
+        metrics = self.policy.finish_episode(buffer)
+
+        self.assertEqual(metrics["motion_decisions"], 0.0)
+        self.assertEqual(metrics["motion_actor_enabled"], 0.0)
+        self.assertEqual(metrics["motion_value_samples"], 1.0)
+        self.assertEqual(metrics["motion_value_enabled"], 1.0)
+
+    def test_motion_only_phase_bitwise_freezes_planner_and_shared_trunk(self) -> None:
+        policy = JointPPOPolicy(
+            self.space,
+            JointPPOConfig(
+                observation_dim=4,
+                hidden_dim=32,
+                learning_rate=1e-3,
+                learning_rate_final=1e-3,
+                update_epochs=1,
+                minibatch_size=2,
+                target_kl=0.0,
+                training_phase="motion_only",
+                motion_behavior_mode="learned",
+                seed=47,
+                device="cpu",
+            ),
+        )
+        motion_prefixes = (
+            "motion_adapter.",
+            "movement_head.",
+            "initial_movement_head.",
+            "motion_critic.",
+        )
+        for name, parameter in policy.network.named_parameters():
+            self.assertEqual(parameter.requires_grad, name.startswith(motion_prefixes))
+        with torch.no_grad():
+            policy.network.motion_critic[-1].weight.zero_()
+            policy.network.motion_critic[-1].bias.zero_()
+        frozen_before = {
+            name: value.detach().clone()
+            for name, value in policy.network.state_dict().items()
+            if not name.startswith(motion_prefixes)
+        }
+        critic_before = {
+            name: value.detach().clone()
+            for name, value in policy.network.state_dict().items()
+            if name.startswith("motion_critic.")
+        }
+
+        metrics = policy.finish_episode(self._one_step_buffer(policy))
+
+        for name, expected in frozen_before.items():
+            self.assertTrue(torch.equal(policy.network.state_dict()[name], expected), name)
+        self.assertTrue(
+            any(
+                not torch.equal(policy.network.state_dict()[name], expected)
+                for name, expected in critic_before.items()
+            )
+        )
+        self.assertEqual(metrics["plan_actor_enabled"], 0.0)
+        self.assertEqual(metrics["sensor_actor_enabled"], 0.0)
+        self.assertEqual(metrics["plan_value_enabled"], 0.0)
+        self.assertEqual(metrics["motion_value_enabled"], 1.0)
+        self.assertEqual(metrics["sensor_value_enabled"], 0.0)
+
+    def test_post_launch_motion_only_freezes_initial_head_and_samples_active(self) -> None:
+        policy = JointPPOPolicy(
+            self.space,
+            JointPPOConfig(
+                observation_dim=4,
+                hidden_dim=32,
+                training_phase="motion_only",
+                motion_behavior_mode="learned",
+                post_launch_motion_only=True,
+                seed=47,
+                device="cpu",
+            ),
+        )
+        trainable_prefixes = (
+            "motion_adapter.",
+            "movement_head.",
+            "motion_critic.",
+        )
+        for name, parameter in policy.network.named_parameters():
+            self.assertEqual(parameter.requires_grad, name.startswith(trainable_prefixes), name)
+        with torch.no_grad():
+            for parameter in policy.network.parameters():
+                parameter.zero_()
+            policy.network.activation_head.bias.copy_(torch.tensor((-20.0, 20.0)))
+            policy.network.initial_movement_head.bias.copy_(
+                torch.tensor((-20.0, -20.0, 20.0))
+            )
+            policy.network.movement_head.bias.copy_(
+                torch.tensor((-20.0, -20.0, 20.0))
+            )
+        post_launch_mask = build_joint_action_mask(
+            self.space,
+            self.states,
+            (True, True),
+            SharedSensorState.initial(SharedSensorConfig(capacity=0)),
+            step=1,
+            motion_decision_interval_steps=1,
+            post_launch_motion_only=True,
+        )
+        action, _ = policy.sample(
+            self.observations,
+            self.states,
+            post_launch_mask,
+            deterministic=True,
+        )
+        self.assertEqual(action.units[0].activate, BinaryChoice.YES)
+        self.assertEqual(action.units[0].movement, Movement.NEUTRAL)
+        self.assertEqual(action.units[1].movement, Movement.POSITIVE)
+
+    def test_forced_plan_choices_train_critic_but_not_actor_or_n_eff(self) -> None:
+        forced_mask = build_joint_action_mask(
+            self.space,
+            self.states,
+            (False, False),
+            SharedSensorState.initial(SharedSensorConfig(capacity=0)),
+            step=1,
+        )
+        action, trace = self.policy.sample(
+            self.observations,
+            self.states,
+            forced_mask,
+            deterministic=True,
+        )
+        transition = JointTransition(
+            observations=self.observations,
+            states=self.states,
+            mask=forced_mask,
+            action=action,
+            trace=trace,
+            rewards=(0.0, 0.0, 0.0),
+            team_reward=0.0,
+            next_observations=self.observations,
+            terminated=(True, True, True),
+            truncated=(False, False, False),
+            team_terminated=True,
+            plan_rewards=(1.0, 0.5, 0.0),
+            motion_rewards=(0.0, 0.0, 0.0),
+            sensor_reward=0.0,
+        )
+        buffer = JointTrajectoryBuffer(self.space, observation_dim=4)
+        buffer.append(transition)
+        packed, plan_active, *_ = self.policy._pack_policy_rollout(buffer.items)
+        self.assertEqual(int(plan_active.sum()), 0)
+        self.assertEqual(int(packed.plan_value_active.sum().item()), 2)
+        legacy_config = copy.deepcopy(self.policy.config)
+        legacy_config.kl_guard_mode = "legacy_minibatch_max"
+        legacy_policy = JointPPOPolicy(self.space, legacy_config)
+        _, legacy_plan_active, *_ = legacy_policy._pack_policy_rollout(
+            buffer.items
+        )
+        # Old checkpoints counted forced WAIT/KEEP planning rows as actor
+        # samples.  Exact resume must retain that historical normalization and
+        # early-stop behavior even though fresh runs exclude them from N_eff.
+        self.assertEqual(int(legacy_plan_active.sum()), 2)
+        critic_before = {
+            name: value.detach().clone()
+            for name, value in self.policy.network.state_dict().items()
+            if name.startswith("plan_critic.")
+        }
+
+        metrics = self.policy.update(buffer)
+
+        self.assertEqual(metrics["plan_decisions"], 0.0)
+        self.assertEqual(metrics["plan_actor_n_eff"], 0.0)
+        self.assertEqual(metrics["plan_actor_enabled"], 0.0)
+        self.assertEqual(metrics["plan_value_samples"], 2.0)
+        self.assertTrue(
+            any(
+                not torch.equal(
+                    self.policy.network.state_dict()[name],
+                    before,
+                )
+                for name, before in critic_before.items()
+            )
+        )
+
+    def test_soft_rollout_kl_stops_only_one_actor_branch(self) -> None:
+        policy = JointPPOPolicy(
+            self.space,
+            JointPPOConfig(
+                observation_dim=4,
+                hidden_dim=32,
+                update_epochs=3,
+                minibatch_size=2,
+                target_kl=0.01,
+                kl_hard_multiplier=3.0,
+                seed=37,
+                device="cpu",
+            ),
+        )
+        monitored: list[dict[str, bool]] = []
+
+        def fake_rollout_kl(*args: object) -> dict[str, float]:
+            branch_state = dict(args[-1])
+            monitored.append(branch_state)
+            return {
+                "plan": 0.02 if len(monitored) == 1 else 0.0,
+                "motion": 0.001,
+                "sensor": 0.002,
+            }
+
+        with mock.patch.object(
+            policy, "_aggregate_rollout_kl", side_effect=fake_rollout_kl
+        ):
+            metrics = policy.finish_episode(self._one_step_buffer(policy))
+
+        self.assertEqual(metrics["epochs_ran"], 3.0)
+        self.assertEqual(metrics["early_stopped"], 0.0)
+        self.assertEqual(metrics["hard_kl_stopped"], 0.0)
+        self.assertEqual(metrics["plan_actor_kl_stopped"], 1.0)
+        self.assertEqual(metrics["motion_actor_kl_stopped"], 0.0)
+        self.assertEqual(metrics["sensor_actor_kl_stopped"], 0.0)
+        self.assertEqual(metrics["plan_actor_minibatch_updates"], 1.0)
+        self.assertEqual(metrics["motion_actor_minibatch_updates"], 3.0)
+        self.assertEqual(metrics["sensor_actor_minibatch_updates"], 3.0)
+        self.assertTrue(monitored[0]["plan"])
+        # A soft-stopped head remains in the full-rollout monitor because the
+        # shared encoder can still move while other branches/critics train.
+        self.assertTrue(monitored[1]["plan"])
+        self.assertTrue(monitored[2]["plan"])
+        self.assertAlmostEqual(metrics["max_plan_approx_kl"], 0.02)
+
+    def test_rollout_kl_aggregates_fixed_behavior_probabilities_by_branch(self) -> None:
+        buffer = self._one_step_buffer(self.policy)
+        transitions = buffer.items
+        packed, plan_active, *_ = self.policy._pack_policy_rollout(transitions)
+        plan_weights = self.policy._episode_balanced_plan_weights(
+            transitions, plan_active
+        )
+        monitored = {"plan": True, "motion": True, "sensor": True}
+
+        unchanged = self.policy._aggregate_rollout_kl(
+            transitions, packed, plan_weights, monitored
+        )
+        with torch.no_grad():
+            self.policy.network.activation_head.bias[BinaryChoice.YES] += 2.0
+        changed = self.policy._aggregate_rollout_kl(
+            transitions, packed, plan_weights, monitored
+        )
+
+        for value in unchanged.values():
+            self.assertAlmostEqual(value, 0.0, places=6)
+        self.assertGreater(changed["plan"], 0.0)
+        self.assertAlmostEqual(changed["motion"], 0.0, places=6)
+        self.assertAlmostEqual(changed["sensor"], 0.0, places=6)
+
+    def test_hard_rollout_kl_stops_all_future_epochs(self) -> None:
+        policy = JointPPOPolicy(
+            self.space,
+            JointPPOConfig(
+                observation_dim=4,
+                hidden_dim=32,
+                update_epochs=4,
+                minibatch_size=2,
+                target_kl=0.01,
+                kl_hard_multiplier=3.0,
+                seed=41,
+                device="cpu",
+            ),
+        )
+        hard_kl = {"plan": 0.031, "motion": 0.0, "sensor": 0.0}
+
+        with mock.patch.object(
+            policy, "_aggregate_rollout_kl", return_value=hard_kl
+        ) as aggregate:
+            metrics = policy.finish_episode(self._one_step_buffer(policy))
+
+        aggregate.assert_called_once()
+        self.assertEqual(metrics["epochs_ran"], 1.0)
+        self.assertEqual(metrics["minibatch_updates"], 1.0)
+        self.assertEqual(metrics["early_stopped"], 1.0)
+        self.assertEqual(metrics["hard_kl_stopped"], 1.0)
+        self.assertAlmostEqual(metrics["early_stop_kl"], 0.031)
+
     def test_plan_weights_balance_units_with_different_decision_counts(self) -> None:
         class Boundary:
             def __init__(self, done: bool) -> None:
@@ -518,6 +1060,36 @@ class JointPolicyTests(unittest.TestCase):
         self.assertEqual(
             actual_trace.shared_sensor.tokens, expected_trace.shared_sensor.tokens
         )
+
+    def test_schema_three_checkpoint_missing_new_guard_fields_uses_defaults(self) -> None:
+        new_fields = (
+            "kl_guard_mode",
+            "min_actor_decisions",
+            "motion_actor_start_update",
+            "sensor_actor_start_update",
+            "kl_hard_multiplier",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old-schema-three.pt"
+            self.policy.save(path)
+            checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+            for name in new_fields:
+                checkpoint["config"].pop(name)
+            torch.save(checkpoint, path)
+
+            restored = JointPPOPolicy.from_checkpoint(path, device="cpu")
+            with self.assertRaisesRegex(ValueError, "kl_guard_mode"):
+                self.policy.load(path)
+            legacy_config = copy.deepcopy(self.policy.config)
+            legacy_config.kl_guard_mode = "legacy_minibatch_max"
+            legacy_policy = JointPPOPolicy(self.space, legacy_config)
+            legacy_policy.load(path)
+
+        self.assertEqual(restored.config.kl_guard_mode, "legacy_minibatch_max")
+        self.assertEqual(restored.config.min_actor_decisions, 0)
+        self.assertEqual(restored.config.motion_actor_start_update, 0)
+        self.assertEqual(restored.config.sensor_actor_start_update, 0)
+        self.assertEqual(restored.config.kl_hard_multiplier, 3.0)
 
     def test_checkpoint_load_rejects_mixed_training_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

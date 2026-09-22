@@ -169,8 +169,22 @@ SIGINT/SIGTERM 在 PPO 更新期间会延迟到该更新、报告和安全 check
 批量计算。完整 rollout 的观测、动作、mask、return 和 advantage 保留在 CPU，只把当前
 minibatch 搬到 GPU，因此显存峰值由 `minibatch_size` 而不是场景的完整 transition 数量
 决定。观测编码、同一步 action mask 和不可变轨迹快照也会复用。网络结构、v3
-checkpoint、rollout 大小和 PPO 超参数均未改变；随机采样仍来自相同的条件分布，但批量
-抽样改变了随机数的消费顺序，因此从旧实现的 checkpoint 续训不会逐位复现旧轨迹。
+checkpoint 张量结构和动作维度没有改变；随机采样仍来自相同的条件分布，但批量抽样
+改变了随机数的消费顺序，因此从旧实现的 checkpoint 续训不会逐位复现旧轨迹。
+
+新建训练默认启用弹种—目标物理兼容 mask（H/M→9400/9600，已发现舰船后 L→9500）
+、60 步重定向最短驻留，以及驻留结束后每 60 步一次的重定向决策窗口。舰船尚未发现
+或航迹过期时，L 可把公开陆地目标仅作为
+搜索/导航锚点；这段时长不会分走陆地毁伤的局部 credit，发现新鲜舰船后锚点立即失效并
+允许换靶。可用 `--disable-low-altitude-search-fallback` 改成原地等待；任何全 False mask
+都不会送入分布。PPO 的 KL 保护按完整 rollout 分支聚合：`1.5*target_kl` 只停止超限 actor，
+`kl_hard_multiplier*target_kl` 才停止全部剩余 epoch。`--min-actor-decisions` 控制分支
+有效样本门槛，低于门槛时 actor 跳过而 critic 继续；motion/sensor 还可通过各自的
+`--*-actor-start-update` 延迟加入，延迟期间分别强制 NEUTRAL/STOP。旧 v3 checkpoint
+完整 `--resume` 时恢复旧的 permissive
+mask、逐步重定向和旧字段默认值；要采用新机制应新建 run，或用 `--init-from` 仅加载权重。
+当前目标失效时会绕过驻留与决策窗口立即允许换靶；需要完全恢复逐步决策时使用
+`--retarget-min-dwell-steps 0 --retarget-decision-interval-steps 1`。
 
 ## 多场景联合 PPO 独立并发
 

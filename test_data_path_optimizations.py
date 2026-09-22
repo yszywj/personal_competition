@@ -180,6 +180,12 @@ class ActionMaskCacheTests(unittest.TestCase):
         environment.tracker = SimpleNamespace(states=states, sensor_state=sensor)
         environment.current_step = 0
         environment.unit_ids = (10,)
+        environment.unit_types = (21000,)
+        environment.config = SimpleNamespace(
+            strict_weapon_target_compatibility=False,
+            retarget_min_dwell_steps=0,
+            retarget_decision_interval_steps=1,
+        )
         environment.sensor_backend_capacity_per_unit = 0
         environment.engine = SimpleNamespace(
             get_simulator_by_id=lambda _entity_id: None

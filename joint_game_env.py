@@ -183,6 +183,13 @@ class JointGameConfig:
     sensor_information_potential_scale: float = 0.015
     gamma: float = 0.995
     terminate_on_all_objectives_destroyed: bool = True
+    strict_weapon_target_compatibility: bool = True
+    allow_low_altitude_search_fallback: bool = True
+    allow_low_altitude_search_replanning: bool = False
+    retarget_min_dwell_steps: int = 0
+    retarget_decision_interval_steps: int = 1
+    motion_decision_interval_steps: int = 1
+    post_launch_motion_only: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -240,6 +247,35 @@ class JointGameConfig:
             raise ValueError("planning reward weights must sum to 1")
         if not isinstance(self.terminate_on_all_objectives_destroyed, bool):
             raise ValueError("terminate_on_all_objectives_destroyed must be boolean")
+        if not isinstance(self.strict_weapon_target_compatibility, bool):
+            raise ValueError("strict_weapon_target_compatibility must be boolean")
+        if not isinstance(self.allow_low_altitude_search_fallback, bool):
+            raise ValueError("allow_low_altitude_search_fallback must be boolean")
+        if not isinstance(self.allow_low_altitude_search_replanning, bool):
+            raise ValueError("allow_low_altitude_search_replanning must be boolean")
+        if (
+            isinstance(self.retarget_min_dwell_steps, bool)
+            or not isinstance(self.retarget_min_dwell_steps, int)
+            or self.retarget_min_dwell_steps < 0
+        ):
+            raise ValueError("retarget_min_dwell_steps must be a non-negative integer")
+        if (
+            isinstance(self.retarget_decision_interval_steps, bool)
+            or not isinstance(self.retarget_decision_interval_steps, int)
+            or self.retarget_decision_interval_steps <= 0
+        ):
+            raise ValueError(
+                "retarget_decision_interval_steps must be a positive integer"
+            )
+
+        if (
+            isinstance(self.motion_decision_interval_steps, bool)
+            or not isinstance(self.motion_decision_interval_steps, int)
+            or self.motion_decision_interval_steps <= 0
+        ):
+            raise ValueError("motion_decision_interval_steps must be a positive integer")
+        if not isinstance(self.post_launch_motion_only, bool):
+            raise ValueError("post_launch_motion_only must be boolean")
 
 
 @dataclass(frozen=True)
@@ -610,6 +646,18 @@ class JointGameEnv:
             allow_staged_sensor=(
                 getattr(self, "sensor_backend", "per_unit") == "team_global"
             ),
+            objective_valid_by_unit=self._objective_validity_by_unit(),
+            routine_retarget_allowed_by_unit=(
+                self._routine_retarget_allowed_by_unit()
+            ),
+            retarget_min_dwell_steps=self.config.retarget_min_dwell_steps,
+            retarget_decision_interval_steps=(
+                self.config.retarget_decision_interval_steps
+            ),
+            motion_decision_interval_steps=(
+                self.config.motion_decision_interval_steps
+            ),
+            post_launch_motion_only=self.config.post_launch_motion_only,
         )
         eligible = np.array(base.shared_sensor_eligible, dtype=np.bool_, copy=True)
         backend_remaining = int(eligible.sum())
@@ -1003,9 +1051,144 @@ class JointGameEnv:
         return float(shaped)
 
     def _objective_validity(self) -> tuple[bool, ...]:
+        if not self.config.strict_weapon_target_compatibility:
+            # Preserve the historical never-expire target table for exact
+            # continuation of legacy checkpoints.
+            return tuple(
+                bool(track.entity_id is not None and track.known)
+                for track in self._tracks
+            )
         return tuple(
-            bool(track.entity_id is not None and track.known)
+            bool(
+                track.entity_id is not None
+                and track.known
+                and (
+                    track.static_public
+                    or self.current_step - track.last_seen_step
+                    <= self.config.max_track_age_steps
+                )
+            )
             for track in self._tracks
+        )
+
+    def _objective_validity_by_unit(self) -> tuple[tuple[bool, ...], ...]:
+        """Return type-aware target masks without deadlocking ship discovery.
+
+        H/M weapons never damage ships, so they remain restricted to land
+        objectives.  L weapons damage only ships, but an L weapon must already
+        be airborne to discover a hidden ship with its local sensor.  Until the
+        first ship is legally known, public land objectives may therefore act
+        as navigation/search anchors.  As soon as any ship is known, those
+        anchors disappear and every L weapon can retarget immediately because
+        its former anchor is no longer valid for that unit.
+        """
+
+        objective_valid = self._objective_validity()
+        if not self.config.strict_weapon_target_compatibility:
+            return tuple(objective_valid for _ in self.unit_types)
+
+        compatible_types = {
+            21000: frozenset((0, 1)),
+            21001: frozenset((0, 1)),
+            21002: frozenset((2,)),
+        }
+        ship_known = any(
+            is_valid and track.type_index == 2
+            for is_valid, track in zip(
+                objective_valid,
+                self._tracks,
+                strict=True,
+            )
+        )
+        return tuple(
+            tuple(
+                bool(
+                    is_valid
+                    and (
+                        track.type_index
+                        in compatible_types.get(unit_type, frozenset())
+                        or (
+                            unit_type == 21002
+                            and self.config.allow_low_altitude_search_fallback
+                            and not ship_known
+                            and track.type_index in (0, 1)
+                        )
+                    )
+                )
+                for is_valid, track in zip(
+                    objective_valid,
+                    self._tracks,
+                    strict=True,
+                )
+            )
+            for unit_type in self.unit_types
+        )
+
+    def _routine_retarget_allowed_by_unit(self) -> tuple[bool, ...]:
+        """Lock an L missile's land search waypoint until its role changes.
+
+        A land objective is only a navigation/search anchor for an L missile,
+        not a damage-compatible mission target. Reconsidering peer land
+        anchors at every ordinary retarget pulse caused periodic target churn.
+        The current anchor therefore stays locked while it remains legal.
+
+        This gate only suppresses routine retarget pulses. When a fresh ship
+        becomes known, the per-unit objective mask makes the land anchor
+        invalid, and the generic invalid-target bypass still unlocks an
+        immediate mission retarget. No extra controller state is required.
+        """
+
+        if (
+            not self.config.strict_weapon_target_compatibility
+            or not self.config.allow_low_altitude_search_fallback
+            or self.config.allow_low_altitude_search_replanning
+        ):
+            return tuple(True for _ in self.unit_types)
+
+        allowed: list[bool] = []
+        for state, unit_type in zip(
+            self.tracker.states,
+            self.unit_types,
+            strict=True,
+        ):
+            objective_slot = int(state.current_objective_slot)
+            current_is_search_anchor = bool(
+                state.phase == UnitPhase.ACTIVE
+                and unit_type == 21002
+                and 0 <= objective_slot < len(self._tracks)
+                and self._tracks[objective_slot].type_index in (0, 1)
+            )
+            allowed.append(not current_is_search_anchor)
+        return tuple(allowed)
+
+    def assignment_is_damage_compatible(
+        self,
+        unit_slot: int,
+        objective_slot: int,
+    ) -> bool:
+        """Whether an assignment can directly damage that objective type.
+
+        Temporary L-to-land search anchors are intentionally excluded.  They
+        may help discover a hidden ship, but must not share local credit for
+        damage actually caused by an H/M weapon.
+        """
+
+        if not 0 <= unit_slot < len(self.unit_types):
+            raise IndexError("unit slot is out of range")
+        if not 0 <= objective_slot < len(self._tracks):
+            raise IndexError("objective slot is out of range")
+        if not self.config.strict_weapon_target_compatibility:
+            # Exact legacy continuation: permissive action masks historically
+            # also treated every assignment as local-credit participation.
+            return True
+        compatible_types = {
+            21000: frozenset((0, 1)),
+            21001: frozenset((0, 1)),
+            21002: frozenset((2,)),
+        }
+        return bool(
+            self._tracks[objective_slot].type_index
+            in compatible_types.get(self.unit_types[unit_slot], frozenset())
         )
 
     def _target_for_slot(self, slot: int) -> _ObjectiveTrack:
@@ -1208,10 +1391,11 @@ class JointGameEnv:
 
     def _objective_frames(self) -> tuple[ObjectiveFrame, ...]:
         loads = self._objective_loads()
+        validity = self._objective_validity()
         return tuple(
             ObjectiveFrame(
                 slot=track.slot,
-                valid=bool(track.entity_id is not None and track.known),
+                valid=validity[track.slot],
                 known=track.known,
                 position=track.position,
                 velocity_xy=track.velocity_xy,

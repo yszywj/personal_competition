@@ -293,7 +293,12 @@ mask 在采样前进入分布，非法动作不参与采样和 log-prob。
 
 - `activate={0,1}`。
 - 若不激活，其余动作对环境无效。
-- 若激活，目标只允许团队全局合法目标槽位。
+- 若激活，目标使用逐弹种 mask：H/M 只选择 `9400/9600`；存在新鲜合法舰船
+  航迹时，L 只选择 `9500`。
+- 舰船尚未发现或航迹超过 `max_track_age_steps` 时，默认允许 L 将公开陆地目标
+  作为临时搜索/导航锚点，使其能够先升空并依靠本地探测发现舰船。该段分配不参与
+  陆地目标的 local damage credit；一旦出现新鲜舰船航迹，锚点对 L 立即变 invalid。
+  `--disable-low-altitude-search-fallback` 可关闭该过渡，此时无舰船目标的 L 只能等待。
 - 激活时同时采样部署坐标和初始机动。
 - 再指派动作不可用。`team_global` 的卫星 requester 可以选该 STAGED 槽；
   `per_unit` 的卫星请求仍不可用。
@@ -303,6 +308,10 @@ mask 在采样前进入分布，非法动作不参与采样和 log-prob。
 - 再次激活和部署坐标不可用。
 - 当前合法团队目标可以用于首次目标或再指派。
 - 再指派时排除当前目标，避免无效重复命令。
+- 当前目标仍有效时，默认至少保持 `retarget_min_dwell_steps`，之后只在
+  `retarget_decision_interval_steps` 的离散窗口开放 `retarget=1`；当前目标对该弹种
+  已失效且存在有效备选时可立即解锁，不必等待窗口。正式新训练两项 CLI 默认均为
+  60 步；将最短保持设为 0、决策间隔设为 1，可恢复旧的逐步决策语义。
 - 左/停/右机动均可用。
 - 卫星请求必须同时满足当前 backend 剩余额度大于零、当前不在对应
   卫星激活窗口、且本步未超过请求上限。`team_global` 的窗口会屏蔽全队。
@@ -511,6 +520,21 @@ embedding 再通过 target-condition encoder 与 Actor 特征融合，产生部�
 边界停止递推，plan 则按回合计算直接终局 return，所以
 拼接不会把一个回合的回报传播到下一个回合。若总轮数不是 4 的整数倍，最后的完整
 回合也会作为较小批次更新，不会丢弃。
+
+Actor 更新使用分支级可靠性门槛。plan 依据 episode-balanced 权重计算 Kish
+有效样本数，motion/sensor 使用有效决策数；低于 `--min-actor-decisions` 的分支跳过
+本次 actor surrogate、entropy 和 KL 判停，但对应 critic 仍训练。motion 与 sensor
+还可用 `--motion-actor-start-update`、`--sensor-actor-start-update` 延迟加入，形成不改
+网络 shape 的粗粒度 scripted curriculum。延迟期间 rollout 分别强制
+`movement=NEUTRAL` / `sensor=STOP`，对应 surrogate/entropy 为零而 critic 继续训练；
+到达指定 update 后才切回策略采样。共享 encoder 在此期间仍可能被其他损失改变，但不会
+改变被强制的环境动作。
+
+KL 不再由随机 minibatch 中 plan/motion/sensor 的最大值立即停止整次更新。每个 epoch
+后在同一个完整 frozen-policy rollout 上分别聚合三路 KL；超过 `1.5*target_kl` 只冻结
+该 actor 的后续 epoch，其他 actor 和 critic 继续；只有可靠分支超过
+`kl_hard_multiplier*target_kl` 才停止全部剩余 epoch。结果中同时记录每路 `N_eff`、
+启用状态、分支软停与 hard stop，避免把“稀疏 sensor 单样本尖峰”误判成全局策略漂移。
 
 `best.pt` 在 PPO 更新前保存，因此它精确对应产生该最佳正式得分的行为策略。
 `latest.pt` 和周期 checkpoint 只在完整 rollout 更新后保存。训练中断时，已采集但尚未
