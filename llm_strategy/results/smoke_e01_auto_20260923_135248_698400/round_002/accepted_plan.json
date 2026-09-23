@@ -1,0 +1,1857 @@
+{
+  "plan_version": "v0",
+  "platforms": [
+    {
+      "platform_id": 2,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [
+        {
+          "step": 3
+        }
+      ],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 3,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 4,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 5,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 6,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2160,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2161,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2162,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2163,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2164,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2218,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2219,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2220,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2221,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2222,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2276,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2277,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2278,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2279,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2280,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2281,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2282,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2283,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2284,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2355,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2356,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2357,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2358,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2359,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2360,
+      "launch": {
+        "mode": "at_step",
+        "step": 0
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 159,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 160,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 161,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 162,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 163,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 164,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 165,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 166,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 167,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2209,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2210,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2211,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2212,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2213,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2214,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2215,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2216,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2217,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2267,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2268,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2269,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2270,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2271,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2272,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2273,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2274,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2361,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2362,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2363,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2364,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2365,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2366,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2367,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2368,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2369,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2370,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2371,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2372,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2373,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2374,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2407,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2408,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2409,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2410,
+      "launch": {
+        "mode": "at_step",
+        "step": 5
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 7,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 8,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 9,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 10,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 11,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 12,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 51
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 13,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 52
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 14,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 53
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 15,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 54
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 16,
+      "launch": {
+        "mode": "at_step",
+        "step": 10
+      },
+      "initial_target": {
+        "mode": "entity",
+        "entity_id": 106
+      },
+      "retarget_orders": [],
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 17,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 18,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 19,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 20,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 21,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 22,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 23,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 24,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 25,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 26,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 27,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 28,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 29,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 30,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 31,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 32,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 33,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 34,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 35,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 36,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 37,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 38,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 39,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 40,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 41,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 42,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 43,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 44,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 45,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 46,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 47,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 48,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 49,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 50,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2165,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2166,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2167,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2168,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2169,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2170,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2171,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2172,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2173,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2174,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2175,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2176,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2177,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2178,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2179,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2180,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2181,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2182,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2183,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2184,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2185,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2186,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2187,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2188,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2189,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2190,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2191,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2192,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2193,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2194,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2195,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2196,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2197,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2198,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2199,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2200,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2411,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2412,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2413,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2414,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2415,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2416,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2417,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2418,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2419,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    },
+    {
+      "platform_id": 2420,
+      "launch": {
+        "mode": "never"
+      },
+      "satellite_steps": [],
+      "motion": "straight"
+    }
+  ],
+  "global_rules": [
+    {
+      "rule_id": "ship_watch",
+      "trigger": {
+        "type": "new_detection",
+        "entity_type": 9500,
+        "occurrence": 1
+      },
+      "actions": [
+        {
+          "type": "retarget",
+          "platform_id": 7,
+          "target": {
+            "mode": "event_entity"
+          }
+        }
+      ]
+    },
+    {
+      "rule_id": "mid_satellite",
+      "trigger": {
+        "type": "at_step",
+        "step": 20
+      },
+      "actions": [
+        {
+          "type": "satellite_request",
+          "platform_id": 159
+        }
+      ]
+    }
+  ]
+}

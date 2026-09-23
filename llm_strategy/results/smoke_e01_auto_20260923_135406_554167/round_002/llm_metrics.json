@@ -1,0 +1,12 @@
+{
+  "api_calls": 1,
+  "planned": true,
+  "plan_rejected": false,
+  "rejection_reason": null,
+  "accepted_plan_sha256": "d189f6dcf3f226bf33464b1b9a9fd38f72dcbe018db6d67a15e1276e465b84ac",
+  "launched_platforms": 84,
+  "executed_commands": 86,
+  "failed_commands": 0,
+  "termination_reason": "time_limit",
+  "final_score": 0.0
+}

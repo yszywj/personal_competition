@@ -1,0 +1,2296 @@
+{
+  "step": 0,
+  "max_steps": 1200,
+  "red_platforms": [
+    {
+      "entity_id": 2,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.32383276483316,
+        "lat": 21.997802273950857,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 3,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.65093447303985,
+        "lat": 21.73903974600289,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 4,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.53588200430669,
+        "lat": 22.706773425811534,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 5,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.05799892477471,
+        "lat": 23.174537919525086,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 6,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.03749565844198,
+        "lat": 22.931030756085875,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2160,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.39237890689127,
+        "lat": 22.8166301466569,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2161,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.10353709371033,
+        "lat": 23.59315556676284,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2162,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.06224782161868,
+        "lat": 21.722247132281982,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2163,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.20876318544616,
+        "lat": 22.03560051964792,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2164,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.34005365223234,
+        "lat": 21.67349949283788,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2218,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.14617430874388,
+        "lat": 24.22748457913378,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2219,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.98030594344704,
+        "lat": 23.668985366028867,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2220,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.3504075121575,
+        "lat": 23.31057814515637,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2221,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.13098385200945,
+        "lat": 21.54700169591515,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2222,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.97089017723776,
+        "lat": 23.64392640992364,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2276,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.58334877204184,
+        "lat": 24.484179355988733,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2277,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.42062827070906,
+        "lat": 24.528479578330792,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2278,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.50164894112024,
+        "lat": 23.255022376038582,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2279,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.52350658558717,
+        "lat": 21.561726064087885,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2280,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.44012491238495,
+        "lat": 22.104256027998257,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2281,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.00393248182564,
+        "lat": 24.137262486624333,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2282,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.17234671221345,
+        "lat": 23.062526677124456,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2283,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.72519327044738,
+        "lat": 23.336369562177303,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2284,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.32598215104886,
+        "lat": 23.21055075192002,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2355,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.55544187488024,
+        "lat": 24.08809916870607,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2356,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.10610941710493,
+        "lat": 23.348977240827043,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2357,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.2484943210431,
+        "lat": 22.41382633253378,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2358,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.7722610987555,
+        "lat": 23.175456172914657,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2359,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.56172938665648,
+        "lat": 24.007977370547056,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2360,
+      "type": 21000,
+      "type_name": "high_speed_strike",
+      "position": {
+        "lon": 116.91248803632982,
+        "lat": 22.96271969880555,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 159,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.17621772849037,
+        "lat": 22.265457660504467,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 160,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.23333608368087,
+        "lat": 23.100377010126476,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 161,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.58912350373225,
+        "lat": 22.367063843685177,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 162,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.00409360338506,
+        "lat": 22.88252345371358,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 163,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.36925357289472,
+        "lat": 23.368926038231095,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 164,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.9530979255251,
+        "lat": 23.778629068548728,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 165,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.51549143307078,
+        "lat": 23.53805607305012,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 166,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.6762000824495,
+        "lat": 21.678176547638508,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 167,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.89953301005795,
+        "lat": 24.07389931933004,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2209,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.90977713755173,
+        "lat": 24.0815995175237,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2210,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.75014045983046,
+        "lat": 23.077508057160202,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2211,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.17852171833758,
+        "lat": 24.104146922366912,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2212,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.33251719986461,
+        "lat": 24.14271777735908,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2213,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.97165728898216,
+        "lat": 22.806267033729178,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2214,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.4013868178677,
+        "lat": 24.624430121334147,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2215,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.72479866563421,
+        "lat": 22.061012077907254,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2216,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.12703836729787,
+        "lat": 21.998797311258915,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2217,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.90485209573323,
+        "lat": 24.161456540706247,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2267,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.52658104709906,
+        "lat": 24.58096185668951,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2268,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.43380943675749,
+        "lat": 24.376751662365034,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2269,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.82615525181522,
+        "lat": 22.19643971318289,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2270,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.25183481136546,
+        "lat": 22.466789953811723,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2271,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.24053939255833,
+        "lat": 23.435242654947675,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2272,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.25936479527022,
+        "lat": 22.882741424089993,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2273,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.13107367650349,
+        "lat": 24.50305628584134,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2274,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.35378402395325,
+        "lat": 23.01193125535672,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2361,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.61252788434446,
+        "lat": 23.168325331809033,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2362,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.51216147243532,
+        "lat": 23.786012308409155,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2363,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.45234579226491,
+        "lat": 23.259841944011264,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2364,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.47803631803208,
+        "lat": 24.60695372087705,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2365,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.69921788218029,
+        "lat": 24.39256708987596,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2366,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.94218058830357,
+        "lat": 22.35665457058838,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2367,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.55951380649772,
+        "lat": 24.612781212244496,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2368,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.83999978339321,
+        "lat": 21.95254363845961,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2369,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.12162195438418,
+        "lat": 22.958989691307643,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2370,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.07254609965649,
+        "lat": 22.294107902895792,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2371,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.07312076697268,
+        "lat": 23.709258079522655,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2372,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.78393601717316,
+        "lat": 24.460187228499933,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2373,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.15444662376869,
+        "lat": 23.863195613201047,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2374,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.66025651519138,
+        "lat": 21.971830693149982,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2407,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.88283283365708,
+        "lat": 24.69289778279907,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2408,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.21958783080191,
+        "lat": 24.643263625432656,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2409,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.39825687471728,
+        "lat": 23.107960557469905,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2410,
+      "type": 21001,
+      "type_name": "medium_speed_strike",
+      "position": {
+        "lon": 116.98987145474429,
+        "lat": 24.247067409293727,
+        "alt": 0.0
+      },
+      "health": 1500.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 7,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.06985542357462,
+        "lat": 21.799352944034755,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 8,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.42451918914252,
+        "lat": 24.228612011417727,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 9,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.12380196114965,
+        "lat": 22.236688583203147,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 10,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.62743322240559,
+        "lat": 24.62743951010812,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 11,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.5771029486175,
+        "lat": 22.809045566347574,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 12,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.97625510559293,
+        "lat": 21.653722846038598,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 13,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.85846845904868,
+        "lat": 22.45571064489453,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 14,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.14425508335744,
+        "lat": 21.888714385658616,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 15,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.30848182410193,
+        "lat": 24.193216985096104,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 16,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.18072637992394,
+        "lat": 23.419280540086138,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 17,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.63891346892619,
+        "lat": 22.72891189099491,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 18,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.54774446570956,
+        "lat": 21.707203617411967,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 19,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.05960116996623,
+        "lat": 22.179663752303778,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 20,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.68039997318179,
+        "lat": 22.91105460870903,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 21,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.31414717037678,
+        "lat": 23.432354149575207,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 22,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.45318437637077,
+        "lat": 22.48923108965015,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 23,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.7943794815225,
+        "lat": 23.806681631307587,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 24,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.24409651072216,
+        "lat": 23.395598243853616,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 25,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.52519650381146,
+        "lat": 24.387953735392315,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 26,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.72944528943921,
+        "lat": 22.450194624137616,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 27,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.98017484749258,
+        "lat": 21.889617068241375,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 28,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.41812282178523,
+        "lat": 23.998565067565323,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 29,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.1519845346605,
+        "lat": 23.11357823157016,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 30,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.03920725704744,
+        "lat": 23.705112326563505,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 31,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.76457086621281,
+        "lat": 23.390985602915368,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 32,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.87547781183089,
+        "lat": 22.53536679239872,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 33,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.69529536627365,
+        "lat": 23.46142059444656,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 34,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.5798952042825,
+        "lat": 23.005477593294664,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 35,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.83996778051254,
+        "lat": 24.617447613856193,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 36,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.47409833741965,
+        "lat": 23.691702278066426,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 37,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.06066942759722,
+        "lat": 23.814923670304598,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 38,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.64712885452766,
+        "lat": 24.777216600239893,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 39,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.82192478660971,
+        "lat": 22.439165255910694,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 40,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.38579144244672,
+        "lat": 23.70655396241782,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 41,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.02256292805559,
+        "lat": 23.02359444478923,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 42,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.16804837890655,
+        "lat": 21.886416121789715,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 43,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.05895441933131,
+        "lat": 24.03516886195932,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 44,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.12934022201868,
+        "lat": 22.317128951199816,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 45,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.39094970313323,
+        "lat": 24.375692514616787,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 46,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.08058130120014,
+        "lat": 22.982318423132792,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 47,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.54943990914404,
+        "lat": 24.41516662725699,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 48,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.81927983783574,
+        "lat": 24.351148750005102,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 49,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.27842106451389,
+        "lat": 22.870478506798605,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 50,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.35877116533163,
+        "lat": 24.417836329754117,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2165,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.00023328190136,
+        "lat": 21.999174276522112,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2166,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.10146436802259,
+        "lat": 22.699912742714083,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2167,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.02550088666615,
+        "lat": 24.385296845333606,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2168,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.61406898778849,
+        "lat": 21.990216601591943,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2169,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.25225775655707,
+        "lat": 22.646385501977214,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2170,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.36416343952828,
+        "lat": 21.905379361515244,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2171,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.84893692648461,
+        "lat": 24.77723898162556,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2172,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.46598945915993,
+        "lat": 23.096654366173688,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2173,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.08588466155616,
+        "lat": 21.837219135268956,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2174,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.342635838243,
+        "lat": 22.373697742666696,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2175,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.82885537812156,
+        "lat": 22.032747414737223,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2176,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.02309572104525,
+        "lat": 24.638252390486517,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2177,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.52825739504212,
+        "lat": 21.983788378367,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2178,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.54317242588212,
+        "lat": 21.589240221693156,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2179,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.52810944093831,
+        "lat": 24.72905410097261,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2180,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.86332503028967,
+        "lat": 23.797449393495747,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2181,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.26111519722936,
+        "lat": 22.71010931281189,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2182,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.16704203453433,
+        "lat": 24.047395097726703,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2183,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.53259239749288,
+        "lat": 24.070881141415985,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2184,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.32966499504776,
+        "lat": 22.23603752124051,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2185,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.81151124677359,
+        "lat": 24.75025596694994,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2186,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.85262879874666,
+        "lat": 24.160059329792702,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2187,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.81833294332537,
+        "lat": 23.941580967239858,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2188,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.22673949003159,
+        "lat": 23.20820779000357,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2189,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.35556254335496,
+        "lat": 21.595634497446508,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2190,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.02793707542206,
+        "lat": 22.4220811788618,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2191,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.25917436326776,
+        "lat": 23.78532240761041,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2192,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.95651507634133,
+        "lat": 22.97585133663019,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2193,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.93702120127624,
+        "lat": 24.76052559206944,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2194,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.95500063132134,
+        "lat": 22.703298421694157,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2195,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.22046232299624,
+        "lat": 22.248591228211403,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2196,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.19670616341932,
+        "lat": 22.174432098811536,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2197,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.62406639743782,
+        "lat": 24.47101751501758,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2198,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.84043552727928,
+        "lat": 23.082262306663075,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2199,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.65297804284101,
+        "lat": 24.13882435800388,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2200,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.08477848645038,
+        "lat": 23.67993264567615,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2411,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.16146605988088,
+        "lat": 22.92402199939221,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2412,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.51560505780436,
+        "lat": 22.619083276318104,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2413,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.19574466613393,
+        "lat": 22.55113437551439,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2414,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.72215083514119,
+        "lat": 21.564293662572897,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2415,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.55405024780833,
+        "lat": 22.95351173594892,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2416,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.01808198082703,
+        "lat": 22.593943034168568,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2417,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.62392707389186,
+        "lat": 23.190465538729402,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2418,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.06429079259075,
+        "lat": 24.750774705642527,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2419,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.78836305609758,
+        "lat": 24.706596663535347,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    },
+    {
+      "entity_id": 2420,
+      "type": 21002,
+      "type_name": "low_cost_strike",
+      "position": {
+        "lon": 118.10477959427283,
+        "lat": 22.376362098733615,
+        "alt": 0.0
+      },
+      "health": 1.0,
+      "stage": -1.0,
+      "is_visible": true
+    }
+  ],
+  "known_targets": [
+    {
+      "entity_id": 51,
+      "type": 9400,
+      "type_name": "hive_target",
+      "position": {
+        "lon": 123.25,
+        "lat": 24.75,
+        "alt": 0.0
+      },
+      "initial_health": 32.0,
+      "initially_public": true
+    },
+    {
+      "entity_id": 52,
+      "type": 9400,
+      "type_name": "hive_target",
+      "position": {
+        "lon": 123.6,
+        "lat": 23.0,
+        "alt": 0.0
+      },
+      "initial_health": 32.0,
+      "initially_public": true
+    },
+    {
+      "entity_id": 53,
+      "type": 9400,
+      "type_name": "hive_target",
+      "position": {
+        "lon": 123.25,
+        "lat": 21.25,
+        "alt": 0.0
+      },
+      "initial_health": 32.0,
+      "initially_public": true
+    },
+    {
+      "entity_id": 54,
+      "type": 9600,
+      "type_name": "sentinel_nest_site",
+      "position": {
+        "lon": 119.95,
+        "lat": 23.0,
+        "alt": 0.0
+      },
+      "initial_health": 20.0,
+      "initially_public": true
+    },
+    {
+      "entity_id": 106,
+      "type": 9600,
+      "type_name": "sentinel_nest_site",
+      "position": {
+        "lon": 121.55,
+        "lat": 23.0,
+        "alt": 0.0
+      },
+      "initial_health": 20.0,
+      "initially_public": true
+    }
+  ],
+  "detected_tracks": [],
+  "satellite_status": {
+    "is_using_satellite": false,
+    "team_uses_remaining_at_planning_time": 100
+  },
+  "satellite_rules": {
+    "team_max_total_uses": 100,
+    "active_window_minutes_per_use": 3.0,
+    "team_shared": true,
+    "effect": "While the window is active the red satellite detects all alive and visible 24000 interceptor entities and shares those tracks with the whole red team; high-speed platforms (21000) get hit rate 1.0 against 9400/9600 during the window.",
+    "command": "A satellite request is issued by any one red platform via the satellite_request action; each accepted request consumes one team use and opens/re-opens the shared window."
+  },
+  "map_rules": {
+    "lon_range": [
+      116.0,
+      124.0
+    ],
+    "lat_range": [
+      20.0,
+      26.0
+    ],
+    "note": "Red platforms are already deployed; deployment positions are listed per platform below and cannot be changed."
+  },
+  "timing_rules": {
+    "max_steps": 1200,
+    "sim_step_ms": 1000,
+    "valid_plan_steps": [
+      0,
+      1199
+    ]
+  },
+  "weapon_rules": {
+    "base_hit_rate": {
+      "21000": {
+        "9400": 0.8,
+        "9600": 0.6,
+        "9500": 0.0
+      },
+      "21001": {
+        "9400": 0.8,
+        "9600": 0.6,
+        "9500": 0.0
+      },
+      "21002": {
+        "9400": 0.05,
+        "9600": 0.05,
+        "9500": 0.8
+      }
+    },
+    "base_damage_points": {
+      "21000": {
+        "9400": 20,
+        "9600": 20,
+        "9500": 20
+      },
+      "21001": {
+        "9400": 5,
+        "9600": 5,
+        "9500": 5
+      },
+      "21002": {
+        "9400": 0,
+        "9600": 0,
+        "9500": 1
+      }
+    },
+    "satellite_hit_bonus": "While the satellite window is active, 21000 hit rate against 9400 and 9600 becomes 1.0.",
+    "multi_hit_modifier": "For 21000/21001 attacking 9400 only: if another 21000/21001 hit the same target within the configured interval and the impact angle difference exceeds the configured minimum angle, the hit rate is multiplied by (1 + up to the configured max increase), decaying linearly with the time gap; similarly, near-simultaneous hits arriving at nearly the same angle multiply the hit rate by (1 - up to the configured max decrease).",
+    "multi_hit_parameters": {
+      "increase_interval_minutes": "see satellite_and_hit_rules in the battle state",
+      "decrease_interval_minutes": "see satellite_and_hit_rules in the battle state"
+    },
+    "communication_ranges_km": {
+      "21000": 50.0,
+      "21001": 20.0,
+      "21002": 10.0
+    },
+    "detection_sharing": "Red platforms within mutual communication range share and fuse their detections per step; the satellite shares its detections with the whole team while active."
+  },
+  "scoring_rules": {
+    "objective_value_weights": {
+      "9400": 5.0,
+      "9600": 2.0,
+      "9500": 1.0
+    },
+    "formula": "final score (0..100) = 100 * sum(objective weight * damage fraction of that objective's initial health) / sum(objective weights); damage fraction is clipped to [0, 1] per objective.",
+    "time_independent": true
+  },
+  "hit_timing_parameters": {
+    "increase_interval_minutes": 2.0,
+    "increase_min_angle_deg": 30.0,
+    "increase_max_fraction": 0.2,
+    "decrease_interval_minutes": 2.0,
+    "decrease_max_angle_deg": 10.0,
+    "decrease_max_fraction": 0.4
+  }
+}
