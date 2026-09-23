@@ -11,8 +11,12 @@ The executor only:
 It never re-decides anything: no target substitution, no re-planning, no
 fallback, no lateral-acceleration commands (V0 motion is fixed "straight").
 Commands whose platform is dead or whose target cannot be resolved are
-recorded as execution failures and skipped.  The accepted plan object is
-treated as immutable read-only data.
+recorded as execution failures and skipped.  Commands that are mutually
+ambiguous at one step (several retargets for one platform, or several team
+satellite requests) are recorded as ``runtime_plan_conflict`` failures and
+none of the conflicting commands is executed -- the executor has no
+authority to pick a winner.  The accepted plan object is treated as
+immutable read-only data.
 """
 
 from __future__ import annotations
@@ -38,6 +42,11 @@ LAUNCH_ROW = 1
 RETARGET_ROW = 2
 SATELLITE_ROW = 3
 
+# V0 opening-catalogue entity types (mirrors commander/state_builder policy):
+# even if a future upstream _get_init_ship_observation() returned more entity
+# types, the executor's target-registry seed only ever admits these.
+OPENING_CATALOGUE_TYPES = frozenset({9400, 9600})
+
 
 @dataclass(frozen=True)
 class TrackPoint:
@@ -49,7 +58,7 @@ class TrackPoint:
 class TargetRegistry:
     """Latest legally known coordinates per blue entity id.
 
-    Seeded with the public opening catalogue (engine fills it with 9400/9600)
+    Seeded with the public opening catalogue (9400/9600 only, enforced here)
     and refreshed from red platforms' own ``detectInfo`` only.
     """
 
@@ -61,8 +70,11 @@ class TargetRegistry:
             if entity is None:
                 continue
             try:
-                entity_id = int(_field(entity, "id", key))
+                entity_id = int(key)
+                entity_type = int(_field(entity, "type"))
             except (TypeError, ValueError):
+                continue
+            if entity_type not in OPENING_CATALOGUE_TYPES:
                 continue
             position = _field(entity, "position") or {}
             self._points[entity_id] = TrackPoint(
@@ -104,6 +116,7 @@ class PlannedCommand:
     kind: str  # launch | retarget | satellite_request
     platform_id: int
     target: TargetRef | None = None
+    bound_entity_id: int | None = None
 
 
 TraceCallback = Callable[[Mapping[str, Any]], None]
@@ -140,6 +153,7 @@ class PlanExecutor:
         self.launched_platforms: set[int] = set()
         self.executed_commands = 0
         self.failed_commands = 0
+        self.runtime_conflicts = 0
 
     # ------------------------------------------------------------------
     # Per-step bookkeeping
@@ -276,12 +290,7 @@ class PlanExecutor:
             return (point.lon, point.lat), None
         return None, "unknown_target_mode"
 
-    def _emit(
-        self,
-        command: PlannedCommand,
-        alive: set[int],
-        bound_entity_id: int | None,
-    ) -> None:
+    def _emit(self, command: PlannedCommand, alive: set[int]) -> None:
         """Resolve one planned command; emit a row or record a failure."""
 
         if command.platform_id not in alive:
@@ -297,7 +306,9 @@ class PlanExecutor:
             self._finish(command, row)
             return
         assert command.target is not None
-        coordinates, failure = self._resolve_target(command.target, bound_entity_id)
+        coordinates, failure = self._resolve_target(
+            command.target, command.bound_entity_id
+        )
         if coordinates is None:
             self._trace(
                 command,
@@ -354,6 +365,7 @@ class PlanExecutor:
         engine_action: list[float] | None,
         success: bool,
         failure_reason: str | None,
+        conflicting_rule_ids: list[str] | None = None,
     ) -> None:
         if not success:
             self.failed_commands += 1
@@ -368,8 +380,83 @@ class PlanExecutor:
             "engine_action": engine_action,
             "success": bool(success),
             "failure_reason": failure_reason,
+            "conflicting_rule_ids": conflicting_rule_ids,
         }
         self._on_trace(record)
+
+    # ------------------------------------------------------------------
+    # Runtime conflict detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _partition_conflicts(
+        candidates: Sequence[PlannedCommand],
+    ) -> tuple[list[PlannedCommand], list[tuple[list[PlannedCommand], list[str]]]]:
+        """Split this step's candidates into (executable, conflict groups).
+
+        A conflict is an unambiguous plan ambiguity the executor has no
+        authority to resolve.  Deliberately minimal definitions only:
+
+        * two or more *different* retarget candidates for the same platform
+          in the same step (the engine would apply them in some order and
+          only the last would matter -- a hidden selection);
+        * two or more satellite_request candidates in the same step (the
+          team executes at most one request per step).
+
+        Everything else -- different platforms, retarget plus satellite on
+        one platform, launch plus retarget -- executes in deterministic
+        order and is NOT a conflict.
+        """
+
+        executable: list[PlannedCommand] = []
+        conflict_groups: list[tuple[list[PlannedCommand], list[str]]] = []
+
+        retargets_by_platform: dict[int, list[PlannedCommand]] = {}
+        satellites: list[PlannedCommand] = []
+        for command in candidates:
+            if command.kind == "retarget":
+                retargets_by_platform.setdefault(command.platform_id, []).append(
+                    command
+                )
+            elif command.kind == "satellite_request":
+                satellites.append(command)
+            else:
+                executable.append(command)
+
+        for platform_id, group in sorted(retargets_by_platform.items()):
+            if len(group) > 1:
+                # Two or more retarget commands for one platform in one step
+                # (even to the identical target) cannot be honoured as
+                # written: sending both would let the engine's command order
+                # silently keep only the last one.  That hidden selection is
+                # exactly what the executor may not perform.
+                conflict_groups.append((list(group), [c.rule_id for c in group]))
+            else:
+                executable.append(group[0])
+
+        if len(satellites) > 1:
+            conflict_groups.append((list(satellites), [c.rule_id for c in satellites]))
+        else:
+            executable.extend(satellites)
+
+        return executable, conflict_groups
+
+    def _record_conflicts(
+        self, groups: Sequence[tuple[list[PlannedCommand], list[str]]]
+    ) -> None:
+        """Trace every command of a conflict group; execute none of them."""
+
+        for group, rule_ids in groups:
+            self.runtime_conflicts += 1
+            ordered_ids = sorted(rule_ids)
+            for command in group:
+                self._trace(
+                    command,
+                    engine_action=None,
+                    success=False,
+                    failure_reason="runtime_plan_conflict",
+                    conflicting_rule_ids=ordered_ids,
+                )
 
     # ------------------------------------------------------------------
     # Public API
@@ -396,8 +483,9 @@ class PlanExecutor:
             if _field(observation, "self") is not None
         }
 
-        # 1. Platform-scheduled commands (launch first, then retargets, then
-        #    satellite), keeping the plan's own schedule semantics.
+        candidates: list[PlannedCommand] = []
+
+        # 1. Platform-scheduled commands (launch, retargets, satellite).
         for platform_id in sorted(self._platform_plan_by_id):
             platform = self._platform_plan_by_id[platform_id]
             if (
@@ -405,7 +493,7 @@ class PlanExecutor:
                 and platform.launch.step == step
                 and platform_id not in self.launched_platforms
             ):
-                self._emit(
+                candidates.append(
                     PlannedCommand(
                         rule_id=f"platform:{platform_id}:launch",
                         trigger=f"launch_schedule(step={platform.launch.step})",
@@ -422,14 +510,12 @@ class PlanExecutor:
                         kind="launch",
                         platform_id=platform_id,
                         target=platform.initial_target,
-                    ),
-                    alive,
-                    None,
+                    )
                 )
             for order in platform.retarget_orders:
                 if order.step != step:
                     continue
-                self._emit(
+                candidates.append(
                     PlannedCommand(
                         rule_id=f"platform:{platform_id}:retarget@{order.step}",
                         trigger=f"retarget_schedule(step={order.step})",
@@ -442,14 +528,12 @@ class PlanExecutor:
                         kind="retarget",
                         platform_id=platform_id,
                         target=order.target,
-                    ),
-                    alive,
-                    None,
+                    )
                 )
             for request in platform.satellite_steps:
                 if request.step != step:
                     continue
-                self._emit(
+                candidates.append(
                     PlannedCommand(
                         rule_id=f"platform:{platform_id}:satellite@{request.step}",
                         trigger=f"satellite_schedule(step={request.step})",
@@ -460,9 +544,7 @@ class PlanExecutor:
                         },
                         kind="satellite_request",
                         platform_id=platform_id,
-                    ),
-                    alive,
-                    None,
+                    )
                 )
 
         # 2. Global rules whose trigger fired at this step. Detection events
@@ -476,7 +558,7 @@ class PlanExecutor:
                 self._event_bindings[rule.rule_id] = int(bound)
             for index, action in enumerate(rule.actions):
                 if isinstance(action, RetargetAction):
-                    self._emit(
+                    candidates.append(
                         PlannedCommand(
                             rule_id=f"{rule.rule_id}:actions[{index}]",
                             trigger=description,
@@ -484,22 +566,26 @@ class PlanExecutor:
                             kind="retarget",
                             platform_id=action.platform_id,
                             target=action.target,
-                        ),
-                        alive,
-                        bound,
+                            bound_entity_id=bound,
+                        )
                     )
                 elif isinstance(action, SatelliteRequestAction):
-                    self._emit(
+                    candidates.append(
                         PlannedCommand(
                             rule_id=f"{rule.rule_id}:actions[{index}]",
                             trigger=description,
                             planned_action=action.to_dict(),
                             kind="satellite_request",
                             platform_id=action.platform_id,
-                        ),
-                        alive,
-                        bound,
+                        )
                     )
+
+        # 3. Conflict gate: ambiguous command groups are traced as failures
+        #    and never executed; the episode continues with the rest.
+        executable, conflict_groups = self._partition_conflicts(candidates)
+        self._record_conflicts(conflict_groups)
+        for command in executable:
+            self._emit(command, alive)
 
     def actions_for(self, platform_id: int, step: int) -> list[list[float]]:
         """Rows for one platform at the current step (straight motion only)."""

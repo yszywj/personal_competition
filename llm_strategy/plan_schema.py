@@ -420,7 +420,6 @@ def parse_plan(raw: Any) -> tuple[BattlePlan | None, list[str]]:
                 f"{path}.motion: V0 supports only {list(SUPPORTED_MOTION_MODES)}, "
                 f"got {motion!r}"
             )
-            motion = "straight"
         initial_target = None
         if entry.get("initial_target") is not None:
             initial_target = _parse_target_ref(
@@ -459,7 +458,11 @@ def parse_plan(raw: Any) -> tuple[BattlePlan | None, list[str]]:
                 step = _require_int(sat_data, "step", sat_path, errors, minimum=0)
                 if step is not None:
                     satellite_steps.append(SatelliteStep(step=step))
-        if platform_id is not None and launch is not None:
+        if (
+            platform_id is not None
+            and launch is not None
+            and motion in SUPPORTED_MOTION_MODES
+        ):
             platforms.append(
                 PlatformPlan(
                     platform_id=platform_id,

@@ -322,7 +322,13 @@ class SatelliteAndStraightTests(unittest.TestCase):
             for pid in (10, 11, 12):
                 for row in executor.actions_for(pid, step):
                     self.assertNotEqual(row[0], 0.0)
-        self.assertTrue(all(item["engine_action"][0] != 0.0 for item in trace))
+        self.assertTrue(
+            all(
+                item["engine_action"] is None
+                or item["engine_action"][0] != 0.0
+                for item in trace
+            )
+        )
 
 
 class FailureHandlingTests(unittest.TestCase):
@@ -434,6 +440,121 @@ class FailureHandlingTests(unittest.TestCase):
         record = trace[-1]
         self.assertFalse(record["success"])
         self.assertEqual(record["failure_reason"], "platform_not_launched")
+
+
+class RuntimeConflictTests(unittest.TestCase):
+    @staticmethod
+    def _payload(actions):
+        return {
+            "plan_version": "v0",
+            "platforms": [
+                {
+                    "platform_id": platform_id,
+                    "launch": {"mode": "at_step", "step": 0},
+                    "initial_target": {"mode": "entity", "entity_id": 51},
+                    "retarget_orders": [],
+                    "satellite_steps": [],
+                    "motion": "straight",
+                }
+                for platform_id in (10, 11)
+            ],
+            "global_rules": [
+                {
+                    "rule_id": rule_id,
+                    "trigger": {
+                        "type": "new_detection",
+                        "entity_type": entity_type,
+                        "occurrence": 1,
+                    },
+                    "actions": [action],
+                }
+                for rule_id, entity_type, action in actions
+            ],
+        }
+
+    def _run(self, actions):
+        trace = []
+        executor = executor_for(self._payload(actions), trace.append)
+        executor.begin_step(0, obs_at(0))
+        detections = [
+            make_detection(
+                entity_id=168, entity_type=9500, lon=119.3, lat=25.35, time=4
+            ),
+            make_detection(
+                entity_id=240, entity_type=24000, lon=120.1, lat=24.2, time=4
+            ),
+        ]
+        executor.begin_step(4, obs_at(4, detections=detections))
+        return executor, trace
+
+    def test_dynamic_retargets_for_same_platform_conflict(self):
+        executor, trace = self._run(
+            [
+                ("ship_rule", 9500, {"type": "retarget", "platform_id": 10,
+                    "target": {"mode": "event_entity"}}),
+                ("air_rule", 24000, {"type": "retarget", "platform_id": 10,
+                    "target": {"mode": "event_entity"}}),
+            ]
+        )
+        self.assertEqual(executor.actions_for(10, 4), [])
+        conflicts = [item for item in trace if item["step"] == 4]
+        self.assertEqual(len(conflicts), 2)
+        self.assertTrue(all(not item["success"] for item in conflicts))
+        self.assertTrue(all(
+            item["failure_reason"] == "runtime_plan_conflict"
+            for item in conflicts
+        ))
+        expected = ["air_rule:actions[0]", "ship_rule:actions[0]"]
+        self.assertTrue(all(item["conflicting_rule_ids"] == expected for item in conflicts))
+        self.assertEqual(executor.runtime_conflicts, 1)
+
+    def test_dynamic_satellite_requests_conflict(self):
+        executor, trace = self._run(
+            [
+                ("ship_satellite", 9500,
+                 {"type": "satellite_request", "platform_id": 10}),
+                ("air_satellite", 24000,
+                 {"type": "satellite_request", "platform_id": 11}),
+            ]
+        )
+        self.assertEqual(executor.actions_for(10, 4), [])
+        self.assertEqual(executor.actions_for(11, 4), [])
+        conflicts = [item for item in trace if item["step"] == 4]
+        self.assertEqual(len(conflicts), 2)
+        self.assertTrue(all(
+            item["failure_reason"] == "runtime_plan_conflict"
+            for item in conflicts
+        ))
+
+    def test_dynamic_retargets_for_different_platforms_both_execute(self):
+        executor, trace = self._run(
+            [
+                ("ship_rule", 9500, {"type": "retarget", "platform_id": 10,
+                    "target": {"mode": "event_entity"}}),
+                ("air_rule", 24000, {"type": "retarget", "platform_id": 11,
+                    "target": {"mode": "event_entity"}}),
+            ]
+        )
+        self.assertEqual(executor.actions_for(10, 4), [[2.0, 10.0, 119.3, 25.35]])
+        self.assertEqual(executor.actions_for(11, 4), [[2.0, 11.0, 120.1, 24.2]])
+        self.assertTrue(all(item["success"] for item in trace if item["step"] == 4))
+        self.assertEqual(executor.runtime_conflicts, 0)
+
+    def test_retarget_and_satellite_both_execute(self):
+        executor, trace = self._run(
+            [
+                ("ship_rule", 9500, {"type": "retarget", "platform_id": 10,
+                    "target": {"mode": "event_entity"}}),
+                ("air_satellite", 24000,
+                 {"type": "satellite_request", "platform_id": 10}),
+            ]
+        )
+        self.assertEqual(
+            executor.actions_for(10, 4),
+            [[2.0, 10.0, 119.3, 25.35], [3.0, 10.0, 0.0, 0.0]],
+        )
+        self.assertTrue(all(item["success"] for item in trace if item["step"] == 4))
+        self.assertEqual(executor.runtime_conflicts, 0)
 
 
 class PlanImmutabilityTests(unittest.TestCase):

@@ -3,7 +3,9 @@
 Each round directory receives:
 
     state_input.json         -- the exact battle state handed to the model
-    glm_raw_response.json    -- raw model output (+ latency / call count)
+    glm_raw_response.json    -- raw content + API metadata (model, HTTP
+                                status, latency, usage tokens, finish_reason;
+                                null when the API did not report them)
     accepted_plan.json       -- the plan exactly as accepted (raw payload)
     plan_sha256.txt          -- SHA256 of the accepted plan file content
     validation_report.json   -- validator PASS/REJECT and error list
@@ -66,21 +68,37 @@ class AuditWriter:
 
     def write_raw_response(
         self,
+        response,
         *,
-        content: str,
         mock: bool,
-        latency_s: float,
         prompt_chars: int,
     ) -> None:
+        """Persist one planning call with the API-reported metadata.
+
+        ``response`` is a :class:`LLMResponse`.  Fields the API did not
+        return stay ``null``; token counts are never estimated.  Credentials
+        (API key / Authorization header) are never part of the record.
+        """
+
         self._write_json(
             "glm_raw_response.json",
             {
                 "mock": bool(mock),
+                "model": response.model,
+                "http_status": response.http_status,
+                "latency_s": float(response.latency_s),
+                "prompt_tokens": response.prompt_tokens,
+                "completion_tokens": response.completion_tokens,
+                "total_tokens": response.total_tokens,
+                "finish_reason": response.finish_reason,
+                "usage_raw": response.raw_metadata.get("usage"),
+                "json_mode_requested": bool(response.json_mode_requested),
+                "json_mode_fallback": bool(response.json_mode_fallback),
+                "http_request_count": int(response.http_request_count),
                 "call_count": 1,
-                "latency_s": float(latency_s),
                 "prompt_chars": int(prompt_chars),
-                "response_chars": len(content),
-                "content": content,
+                "response_chars": len(response.content),
+                "content": response.content,
                 "created_at": datetime.now().astimezone().isoformat(),
             },
         )

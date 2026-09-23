@@ -4,6 +4,7 @@ __pycache__/
 /.conda/
 /results/
 /Results/
+/llm_strategy/results/
 /models/
 /launcher_runs/
 /.runtime/

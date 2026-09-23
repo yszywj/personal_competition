@@ -27,6 +27,9 @@ from .plan_schema import EVENT_ENTITY_TYPES
 
 RED_PLATFORM_TYPES = {21000, 21001, 21002}
 OBJECTIVE_TYPES = {9400, 9500, 9600}
+# V0 opening-catalogue admission: whatever the upstream environment returns,
+# only these entity types may enter the LLM's opening target catalogue.
+OPENING_CATALOGUE_TYPES = frozenset({9400, 9600})
 TYPE_NAMES = {
     21000: "high_speed_strike",
     21001: "medium_speed_strike",
@@ -258,7 +261,14 @@ def _collect_detected_tracks(
 
 
 def _known_targets_from_init(init_ship_observation: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Opening catalogue facts. The engine fills this with 9400/9600 only."""
+    """Opening catalogue facts, hard-filtered to 9400/9600.
+
+    The filter is enforced locally on purpose: even if a future upstream
+    ``_get_init_ship_observation()`` were to return other entity types
+    (e.g. 9500 ships), the V0 opening catalogue must never widen the LLM's
+    information rights.  9500 stays reachable only through legal detectInfo
+    event rules.
+    """
 
     entities = _field(init_ship_observation, "entities") or {}
     records: list[dict[str, Any]] = []
@@ -270,6 +280,8 @@ def _known_targets_from_init(init_ship_observation: Mapping[str, Any]) -> list[d
             entity_id = int(_field(entity, "id", key))
             entity_type = int(_field(entity, "type"))
         except (TypeError, ValueError):
+            continue
+        if entity_type not in OPENING_CATALOGUE_TYPES:
             continue
         position = _field(entity, "position") or {}
         records.append(

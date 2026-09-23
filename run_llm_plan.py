@@ -378,6 +378,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "accepted_plan_sha256": commander.accepted_plan_sha256,
                 "plan_rejected": bool(commander.plan_rejected),
                 "rejection_reason": commander.rejection_reason,
+                "failed_commands": commander.failed_commands,
+                "runtime_conflicts": commander.runtime_conflicts,
             }
             filename = (
                 "summary.json"

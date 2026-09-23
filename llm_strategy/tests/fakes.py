@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from personal_train.llm_strategy.glm_client import LLMResponse
 from personal_train.llm_strategy.state_builder import EnvironmentRules
 
 
@@ -162,9 +163,12 @@ class CountingClient:
         self.call_count = 0
         self.prompts: list[tuple[str, str]] = []
 
-    def chat(self, system_prompt: str, user_prompt: str) -> str:
+    def chat(self, system_prompt: str, user_prompt: str) -> LLMResponse:
         self.call_count += 1
         self.prompts.append((system_prompt, user_prompt))
-        if isinstance(self.payload, str):
-            return self.payload
-        return json.dumps(self.payload, ensure_ascii=False)
+        content = (
+            self.payload
+            if isinstance(self.payload, str)
+            else json.dumps(self.payload, ensure_ascii=False)
+        )
+        return LLMResponse(content=content, model=self.model)

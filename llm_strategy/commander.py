@@ -17,12 +17,21 @@ from typing import Any, Mapping, Sequence
 
 from .audit import AuditWriter
 from .executor import PlanExecutor
-from .glm_client import GLMClient, MockGLMClient, extract_json_payload
+from .glm_client import GLMClient, LLMResponse, MockGLMClient, extract_json_payload
 from .plan_schema import BattlePlan, parse_plan
-from .state_builder import EnvironmentRules, build_battle_state
+from .state_builder import (
+    EnvironmentRules,
+    build_battle_state,
+    _field,
+)
 from .validator import validate_plan
 
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "system_prompt.md"
+
+# V0 opening-catalogue entity types.  Enforced locally so that a future
+# upstream change to _get_init_ship_observation() can never silently widen
+# the LLM's information rights (9500 stays detectInfo-only).
+OPENING_CATALOGUE_TYPES = frozenset({9400, 9600})
 
 
 def load_system_prompt() -> str:
@@ -58,6 +67,7 @@ class LLMPlanCommander:
         self.rejection_reason: str | None = None
         self._last_step = -1
         self.api_call_count = 0
+        self._last_llm_response: LLMResponse | None = None
 
     # ------------------------------------------------------------------
     # Registration / lifecycle
@@ -79,6 +89,14 @@ class LLMPlanCommander:
     def launched_platform_count(self) -> int:
         return len(self._executor.launched_platforms) if self._executor else 0
 
+    @property
+    def failed_commands(self) -> int:
+        return self._executor.failed_commands if self._executor else 0
+
+    @property
+    def runtime_conflicts(self) -> int:
+        return self._executor.runtime_conflicts if self._executor else 0
+
     def register_platform(self, entity_id: int) -> None:
         self._platform_ids.append(int(entity_id))
 
@@ -95,19 +113,34 @@ class LLMPlanCommander:
         self.rejection_reason = None
         self._last_step = -1
         self.api_call_count = 0
+        self._last_llm_response = None
 
     # ------------------------------------------------------------------
     # One-shot planning
     # ------------------------------------------------------------------
 
     def _known_entity_ids(self) -> set[int]:
+        """Entity ids the model may legally reference at planning time.
+
+        Hardened independently of the upstream environment: even if a future
+        ``_get_init_ship_observation()`` were to return other entity types
+        (e.g. 9500 ships), the V0 opening catalogue only ever admits 9400 and
+        9600.  9500 remains reachable exclusively through legal detectInfo
+        event rules.
+        """
+
         entities = self.init_ship_observation.get("entities") or {}
         known: set[int] = set()
         for key, entity in entities.items():
+            if entity is None:
+                continue
             try:
-                known.add(int(key))
+                entity_type = int(_field(entity, "type"))
+                entity_id = int(key)
             except (TypeError, ValueError):
                 continue
+            if entity_type in OPENING_CATALOGUE_TYPES:
+                known.add(entity_id)
         return known
 
     def _plan_once(
@@ -123,19 +156,17 @@ class LLMPlanCommander:
         system_prompt = load_system_prompt()
         user_prompt = json.dumps(state, ensure_ascii=False)
 
-        started = time.perf_counter()
-        content = self.client.chat(system_prompt, user_prompt)
-        latency = time.perf_counter() - started
+        response = self.client.chat(system_prompt, user_prompt)
         self.api_call_count += 1
+        self._last_llm_response = response
         is_mock = isinstance(self.client, MockGLMClient)
         self.audit.write_raw_response(
-            content=content,
+            response,
             mock=is_mock,
-            latency_s=latency,
             prompt_chars=len(system_prompt) + len(user_prompt),
         )
 
-        payload, error = extract_json_payload(content)
+        payload, error = extract_json_payload(response.content)
         if error is not None or not isinstance(payload, Mapping):
             reason = error or "model response is not a JSON object"
             self._reject([f"parse: {reason}"], raw_content_saved=True)
@@ -210,8 +241,14 @@ class LLMPlanCommander:
         return self._executor.actions_for(platform_id, step)
 
     def write_round_metrics(self, *, extra: Mapping[str, Any] | None = None) -> None:
+        response = self._last_llm_response
         metrics: dict[str, Any] = {
             "api_calls": int(self.api_call_count),
+            "model": response.model if response else None,
+            "latency_s": float(response.latency_s) if response else None,
+            "prompt_tokens": response.prompt_tokens if response else None,
+            "completion_tokens": response.completion_tokens if response else None,
+            "total_tokens": response.total_tokens if response else None,
             "planned": bool(self._planned),
             "plan_rejected": bool(self.plan_rejected),
             "rejection_reason": self.rejection_reason,
@@ -221,9 +258,11 @@ class LLMPlanCommander:
         if self._executor is not None:
             metrics["executed_commands"] = self._executor.executed_commands
             metrics["failed_commands"] = self._executor.failed_commands
+            metrics["runtime_conflicts"] = self._executor.runtime_conflicts
         else:
             metrics["executed_commands"] = 0
             metrics["failed_commands"] = 0
+            metrics["runtime_conflicts"] = 0
         if extra:
             metrics.update(dict(extra))
         self.audit.write_metrics(metrics)
