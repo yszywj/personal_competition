@@ -245,10 +245,21 @@ class LLMPlanCommander:
         metrics: dict[str, Any] = {
             "api_calls": int(self.api_call_count),
             "model": response.model if response else None,
+            "http_status": response.http_status if response else None,
+            "http_request_count": (
+                int(response.http_request_count) if response else None
+            ),
+            "json_mode_requested": (
+                bool(response.json_mode_requested) if response else None
+            ),
+            "json_mode_fallback": (
+                bool(response.json_mode_fallback) if response else None
+            ),
             "latency_s": float(response.latency_s) if response else None,
             "prompt_tokens": response.prompt_tokens if response else None,
             "completion_tokens": response.completion_tokens if response else None,
             "total_tokens": response.total_tokens if response else None,
+            "finish_reason": response.finish_reason if response else None,
             "planned": bool(self._planned),
             "plan_rejected": bool(self.plan_rejected),
             "rejection_reason": self.rejection_reason,

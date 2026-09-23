@@ -174,10 +174,26 @@ class GLMClient:
 
         if 200 <= status < 300:
             return False
-        if status < 400 or status >= 500:
+        if status < 400 or status >= 500 or status == 429:
             return False
         lowered = body.lower()
-        return "response_format" in lowered or "json_object" in lowered
+        names_parameter = (
+            "response_format" in lowered or "json_object" in lowered
+        )
+        explicitly_unsupported = any(
+            marker in lowered
+            for marker in (
+                "not supported",
+                "unsupported",
+                "does not support",
+                "isn't supported",
+                "not available",
+                "unrecognized",
+                "unknown parameter",
+                "not allowed",
+            )
+        )
+        return names_parameter and explicitly_unsupported
 
     def chat(self, system_prompt: str, user_prompt: str) -> LLMResponse:
         """One planning call; returns the structured response."""
@@ -325,17 +341,18 @@ def extract_json_payload(raw: str) -> tuple[object | None, str | None]:
     if not text:
         return None, "model response is empty"
     if text.startswith("```"):
-        first_newline = text.find("\n")
-        if first_newline != -1:
-            text = text[first_newline + 1 :]
-        if text.rstrip().endswith("```"):
-            text = text.rstrip()[:-3].rstrip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None, "model response contains no JSON object"
+        lines = text.splitlines()
+        if (
+            len(lines) < 3
+            or lines[0].strip() != "```json"
+            or lines[-1].strip() != "```"
+        ):
+            return None, "model response is not a complete fenced JSON block"
+        text = "\n".join(lines[1:-1])
     try:
-        payload = json.loads(text[start : end + 1])
+        payload = json.loads(text)
     except json.JSONDecodeError as error:
         return None, f"model response is not valid JSON: {error}"
+    if not isinstance(payload, Mapping):
+        return None, "model response JSON must be an object"
     return payload, None
