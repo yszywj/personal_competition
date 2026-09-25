@@ -1,0 +1,186 @@
+{
+  "scenario": "E01",
+  "policies": {
+    "red": "llm_plan",
+    "red_motion": "straight",
+    "blue": "b0_fixed_ratio_random"
+  },
+  "steps_executed": 3000,
+  "termination_reason": "environment_done",
+  "score": {
+    "score": 89.65517241379311,
+    "raw_score": 0.896551724137931,
+    "K": 0.896551724137931,
+    "T": 0.0,
+    "completed": false,
+    "destroyed_ids": [
+      54,
+      106,
+      168,
+      2553,
+      52,
+      2555,
+      53,
+      2557,
+      2552
+    ],
+    "destroyed_weight": 26.0,
+    "total_objective_weight": 29.0,
+    "objective_weights": {
+      "54": 2.0,
+      "106": 2.0,
+      "168": 1.0,
+      "2553": 2.0,
+      "52": 5.0,
+      "2570": 1.0,
+      "2555": 2.0,
+      "53": 5.0,
+      "2573": 1.0,
+      "2557": 2.0,
+      "2575": 1.0,
+      "2552": 5.0
+    },
+    "destruction_steps": {
+      "52": 296,
+      "53": 307,
+      "54": 401,
+      "106": 179,
+      "168": 474,
+      "2552": 490,
+      "2553": 137,
+      "2555": 151,
+      "2557": 205
+    }
+  },
+  "red": {
+    "platforms_total": 126,
+    "launched": 122,
+    "alive": 4,
+    "lost": 122
+  },
+  "blue": {
+    "entities_total": 114,
+    "alive": 5,
+    "destroyed": 109,
+    "initial_health_total": 229666.8,
+    "remaining_health_total": 4503.6
+  },
+  "objectives": [
+    {
+      "id": 54,
+      "name": "哨卫巢_54",
+      "type": 9600,
+      "weight": 2.0,
+      "initial_health": 18.0,
+      "final_health": 0.0,
+      "destroyed_step": 401
+    },
+    {
+      "id": 106,
+      "name": "哨卫巢_106",
+      "type": 9600,
+      "weight": 2.0,
+      "initial_health": 18.0,
+      "final_health": 0.0,
+      "destroyed_step": 179
+    },
+    {
+      "id": 168,
+      "name": "暗巢_168",
+      "type": 9500,
+      "weight": 1.0,
+      "initial_health": 1.2000000000000002,
+      "final_health": 0.0,
+      "destroyed_step": 474
+    },
+    {
+      "id": 2553,
+      "name": "site_added_2553",
+      "type": 9600,
+      "weight": 2.0,
+      "initial_health": 18.0,
+      "final_health": 0.0,
+      "destroyed_step": 137
+    },
+    {
+      "id": 52,
+      "name": "母巢_52",
+      "type": 9400,
+      "weight": 5.0,
+      "initial_health": 24.0,
+      "final_health": 0.0,
+      "destroyed_step": 296
+    },
+    {
+      "id": 2570,
+      "name": "ship_added_2570",
+      "type": 9500,
+      "weight": 1.0,
+      "initial_health": 1.2000000000000002,
+      "final_health": 1.2000000000000002,
+      "destroyed_step": null
+    },
+    {
+      "id": 2555,
+      "name": "site_added_2555",
+      "type": 9600,
+      "weight": 2.0,
+      "initial_health": 18.0,
+      "final_health": 0.0,
+      "destroyed_step": 151
+    },
+    {
+      "id": 53,
+      "name": "母巢_53",
+      "type": 9400,
+      "weight": 5.0,
+      "initial_health": 24.0,
+      "final_health": 0.0,
+      "destroyed_step": 307
+    },
+    {
+      "id": 2573,
+      "name": "ship_added_2573",
+      "type": 9500,
+      "weight": 1.0,
+      "initial_health": 1.2000000000000002,
+      "final_health": 1.2000000000000002,
+      "destroyed_step": null
+    },
+    {
+      "id": 2557,
+      "name": "site_added_2557",
+      "type": 9600,
+      "weight": 2.0,
+      "initial_health": 18.0,
+      "final_health": 0.0,
+      "destroyed_step": 205
+    },
+    {
+      "id": 2575,
+      "name": "ship_added_2575",
+      "type": 9500,
+      "weight": 1.0,
+      "initial_health": 1.2000000000000002,
+      "final_health": 1.2000000000000002,
+      "destroyed_step": null
+    },
+    {
+      "id": 2552,
+      "name": "target_added_2552",
+      "type": 9400,
+      "weight": 5.0,
+      "initial_health": 24.0,
+      "final_health": 0.0,
+      "destroyed_step": 490
+    }
+  ],
+  "llm_plan": {
+    "api_calls": 1,
+    "accepted_plan_sha256": "b750a1f88aed3d1ba38ac9ceb33b6d3766c87f394dd3bc37b65169d451f9749a",
+    "plan_rejected": false,
+    "rejection_reason": null,
+    "failed_commands": 155,
+    "runtime_conflicts": 0
+  }
+}

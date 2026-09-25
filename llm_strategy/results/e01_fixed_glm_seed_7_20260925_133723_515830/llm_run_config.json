@@ -1,0 +1,16 @@
+{
+  "created_at": "2026-09-25T13:37:23.594515+08:00",
+  "scenario": "E01",
+  "scenario_path": "/home/amax/ry/competition/competition_envs/scenarios/cases/final20/easy/E01/scenario.json",
+  "rounds": 1,
+  "seed": 7,
+  "blue_policy": "b0_fixed_ratio_random",
+  "red_policy": "llm_plan",
+  "red_motion": "straight",
+  "mock_plan": "/home/amax/ry/competition/personal_train/llm_strategy/results/glm_final20_e01_test_20260924_170300_459556/round_001/accepted_plan.json",
+  "model": "mock:accepted_plan.json",
+  "step_limit": 3000,
+  "official_max_steps": 3000,
+  "audit_root": "/home/amax/ry/competition/personal_train/llm_strategy/results/e01_fixed_glm_seed_7_20260925_133723_515830",
+  "runtime_dir": "/home/amax/ry/competition/personal_train/.runtime/training_runs/e01_fixed_glm_seed_7_20260925_133723_515830-88f6c7a42fb2"
+}

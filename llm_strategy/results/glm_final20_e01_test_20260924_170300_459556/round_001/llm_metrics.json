@@ -1,0 +1,23 @@
+{
+  "api_calls": 1,
+  "model": "glm-5.3",
+  "http_status": 200,
+  "http_request_count": 1,
+  "json_mode_requested": true,
+  "json_mode_fallback": false,
+  "latency_s": 490.99131057038903,
+  "prompt_tokens": 15592,
+  "completion_tokens": 40971,
+  "total_tokens": 56563,
+  "finish_reason": "stop",
+  "planned": true,
+  "plan_rejected": false,
+  "rejection_reason": null,
+  "accepted_plan_sha256": "b750a1f88aed3d1ba38ac9ceb33b6d3766c87f394dd3bc37b65169d451f9749a",
+  "launched_platforms": 122,
+  "executed_commands": 220,
+  "failed_commands": 153,
+  "runtime_conflicts": 0,
+  "termination_reason": "environment_done",
+  "final_score": 89.65517241379311
+}

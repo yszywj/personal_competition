@@ -1,10 +1,10 @@
-__pycache__/
+zg__pycache__/
 *.py[cod]
 /.cache/
 /.conda/
 /results/
 /Results/
-/llm_strategy/results/
+# /llm_strategy/results/
 /models/
 /launcher_runs/
 /.runtime/

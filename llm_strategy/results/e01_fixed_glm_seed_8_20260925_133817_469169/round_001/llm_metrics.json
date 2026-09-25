@@ -1,0 +1,23 @@
+{
+  "api_calls": 1,
+  "model": "mock:accepted_plan.json",
+  "http_status": null,
+  "http_request_count": 0,
+  "json_mode_requested": false,
+  "json_mode_fallback": false,
+  "latency_s": 1.86823308467865e-06,
+  "prompt_tokens": null,
+  "completion_tokens": null,
+  "total_tokens": null,
+  "finish_reason": "mock",
+  "planned": true,
+  "plan_rejected": false,
+  "rejection_reason": null,
+  "accepted_plan_sha256": "b750a1f88aed3d1ba38ac9ceb33b6d3766c87f394dd3bc37b65169d451f9749a",
+  "launched_platforms": 122,
+  "executed_commands": 220,
+  "failed_commands": 153,
+  "runtime_conflicts": 0,
+  "termination_reason": "environment_done",
+  "final_score": 89.65517241379311
+}
