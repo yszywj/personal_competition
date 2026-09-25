@@ -133,7 +133,7 @@ class GLMClient:
         return cls(
             api_key=os.environ.get("GLM_API_KEY", "").strip(),
             base_url=os.environ.get("GLM_BASE_URL", "").strip()
-            or "https://open.bigmodel.cn/api/paas/v4",
+            or "https://open.bigmodel.cn/api/coding/paas/v4",
             model=os.environ.get("GLM_MODEL", "").strip() or "glm-4.5",
             timeout_s=float(os.environ.get("GLM_TIMEOUT_S", "300")),
             temperature=float(os.environ.get("GLM_TEMPERATURE", "0.2")),
